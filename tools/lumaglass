@@ -741,11 +741,20 @@ verb_apply() {
 # ---------------------------------------------------------------- boot-bind
 
 verb_boot_bind() {
-  # The boot hook's opening move. There is no longer a race to win for the
-  # compositor: the env file persists in /var, so the compositor that started
-  # at boot+2s already loaded the shadow module. What this does is bind Home's
-  # assets - a bind mount does not survive a reboot - and check the two things
-  # that can make a persistent env file dangerous.
+  # The boot hook's opening move. The env file persists in /var, so the
+  # compositor that started at boot+2s has normally already loaded the shadow
+  # module and there is no race left to win. Normally, not always: var.mount
+  # goes active at 1.946s and the compositor starts at ~2s, and
+  # surface-manager-daemon is ordered against mount-readonly-volatile (1.315s),
+  # not against var.mount, so there is no guarantee /var is up when systemd
+  # reads the EnvironmentFile. If that ~50ms race is lost the env file is
+  # simply absent and the compositor comes up stock; the apply that follows
+  # this sees a live panel with no shadow and restarts it once. Winning the
+  # race costs nothing, losing it costs what every boot used to cost.
+  #
+  # What this does is bind Home's assets - a bind mount does not survive a
+  # reboot - and check the two things that can make a persistent env file
+  # dangerous.
   #
   # 1. A firmware update replaces the stock compositor module. Our shadow was
   #    built from the old one, so it would feed stale QML to new libraries.
