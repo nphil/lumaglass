@@ -214,6 +214,19 @@ a 1.7 GB firmware update and put its NSU alert up at boot+34 s for 30 s on
 every boot. tvweb 0.34.3 carries those hosts whenever
 `/var/luna/preferences/webosbrew_block_updates` exists.
 
+tvweb also offers QML screen saver replacements, bind-mounted over the whole
+`com.webos.app.screensaver` directory behind a copy of the stock
+`appinfo.json`. On webOS 10 that app is Flutter (`"type": "flutter"`, code in
+`lib/libapp.so`), so every launch failed "Unable to start engine without AOT
+data" and exited 85 ms later, and tvpower then refused further requests
+(`InvalidStatechangeRequest`) until a power cycle - the set showed no screen
+saver at all. This is not the compositor widgets: with stock restored, LG's
+idle detector `com.webos.service.nop` called `power2/turnOnScreenSaver`
+exactly 180 s after the last input and the stock app stayed up. tvweb 0.34.4
+reads the stock app type, keeps the replacements off non-QML firmware, and
+restores stock at startup if one is mounted. Screen saver idle time on this
+set is 3 minutes; `screenSaverTime` is not a settingsservice key here.
+
 ## Compositor restart side effects still worth knowing
 
 A bare `systemctl restart surface-manager-daemon` on stock firmware, no mod,
