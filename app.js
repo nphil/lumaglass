@@ -93,7 +93,7 @@
     persist: false,
     fps: false,
     ntfy: { enabled: false, url: '' },
-    version: '0.3.0',
+    version: '0.3.1',
     firmware: '10.2.1',
     model: 'HE_DTV_W24G_AFABATAA'
   };
