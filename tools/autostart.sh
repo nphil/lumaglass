@@ -56,12 +56,11 @@ fi
 
 # --worker: the detached half.
 #
-# Order matters here and is measured, not guessed: the compositor starts about
-# two seconds after this worker. boot-bind mounts the previous boot's verified
-# set in well under a second, so the compositor reads the modded QML on its
-# first start. The full apply that follows then finds the set unchanged and
-# the compositor already showing it, and makes no restart - which is the
-# difference between a clean boot and a fifteen-second black screen.
+# boot-bind first, so the binds are live within a second of this hook; then
+# the full apply, which finds the compositor started before them (it comes up
+# at boot+2s, this hook at boot+20s) and makes the one restart a cold boot
+# needs, as early as the hook allows. Any later compositor start reads the
+# modded QML on its own.
 if [ "$1" = "--worker" ]; then
   bb=$("$CLI" boot-bind 2>&1)
   log "boot-bind: $(echo "$bb" | tr -d '\n' | cut -c1-200)"

@@ -5,6 +5,32 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.3] - 2026-09-14
+
+### Fixed
+
+- 0.2.2 could leave the compositor on stock QML under the modded layout: a
+  black Home with only the sidebar and dock. It judged whether the compositor
+  predated the binds by `/proc/<pid>`'s mtime, which on this kernel is only the
+  time the `/proc` entry was last instantiated, not the process start. The
+  decision now uses the kernel's own record (`/proc/<pid>/stat` field 22), in
+  seconds since boot, and the bind time is recorded the same way and scoped to
+  the boot id, so it cannot be confused by an unsynchronised wall clock or a
+  record left by a previous boot
+- The shader-failure check is anchored on a log line count taken before the
+  restart again, never a timestamp: the log spans boots and its early lines
+  carry an unsynchronised clock
+
+### Changed
+
+- 0.2.2 claimed cold boot no longer restarts the compositor. That was wrong,
+  and the measurement behind it was the same bogus timestamp. The compositor
+  starts at boot+2 s and Homebrew Channel's hooks run at boot+20 s, and `/etc`
+  is a read-only overlay with no way to order a unit ahead of it, so a cold
+  boot always takes exactly one restart. `boot-bind` stays: it makes that
+  restart happen as early as the hook allows, and any later compositor start
+  picks the modded QML up on its own
+
 ## [0.2.2] - 2026-09-14
 
 ### Changed
