@@ -442,8 +442,9 @@
     state.isExecuting = true;
 
     // "system" (Quick Start+ on, SDDP still enabled) is the stock state and
-    // reads as off: the first wake crashes webos-sddp and the next power-off
-    // reboots, so it is not instant-on in practice.
+    // reads as off: on a set with a VPN tun interface webos-sddp crashes on
+    // the next network change and the next power-off reboots, so it is not
+    // instant-on in practice.
     const warm = state.status.standby === 'warm';
     try {
       await cli('standby', warm ? 'cold' : 'warm');

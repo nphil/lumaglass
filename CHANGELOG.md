@@ -5,6 +5,21 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.6] - 2026-09-14
+
+### Changed
+
+- The cause given in 0.3.5 for the `webos-sddp` crash is corrected. It does
+  not crash "on the first wake on this firmware"; it segfaults in
+  `SDDPSetDevice` whenever it reads the interface list and finds a
+  point-to-point interface with the multicast flag - the Tailscale `tun` on
+  the reference set. With `tailscaled` stopped it starts and stays up; with
+  the tunnel present it dies within 3s of starting. It only looked like a
+  wake crash because at boot it starts before Tailscale's hook creates the
+  tunnel and re-reads interfaces on the first wake. A stock set has no such
+  interface. The toggle's behaviour is unchanged; README, the handoff and
+  the code comments now say why.
+
 ## [0.3.5] - 2026-09-14
 
 ### Fixed

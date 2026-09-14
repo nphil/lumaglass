@@ -145,12 +145,27 @@ Two reports were arming it.
    the 0x02 bytes rdxd uses in place of `/` as `?`; `rm -f` on those names
    was a no-op counted as success. The sweep now uses pathname expansion
    (raw bytes) and runs again once Home is back on the panel.
-2. `webos-sddp` (Control4 discovery) crashes on the first wake from active
-   standby (`SDDPSetDevice+0x14f`) and stays dead for the rest of the boot.
-   Not this mod's. Its script is gated on the set's own `enableSDDP` setting,
-   so the **Instant on** toggle (`standby warm`) turns that off and Quick
+2. `webos-sddp` (Control4 discovery) segfaults in `SDDPSetDevice` (NULL
+   dereference, backtrace `main → start_sddp → SDDPStart → SDDPSetDevice`)
+   whenever it reads the interface list and finds a point-to-point interface
+   carrying the multicast flag: the Tailscale `tun` (`/32`, no broadcast) on
+   the reference set. Proven both ways: with `tailscaled` stopped it starts
+   and stays active; with the tunnel present it dies within 3 s of
+   `systemctl start`. A stock set has no such interface. At boot it starts at
+   ~42 s, before Tailscale's hook (which sleeps 30 s) creates the tunnel, so
+   it survives until the first wake re-reads interfaces - which is why it
+   first looked like a wake crash. Not this mod's and not LG's for normal
+   customers. Its script is gated on the set's own `enableSDDP` setting, so
+   the **Instant on** toggle (`standby warm`) turns that off and Quick
    Start+ on, remembering the previous value; `standby cold` restores it and
-   turns Quick Start+ off.
+   turns Quick Start+ off. Removing Tailscale from the set would make the
+   SDDP part unnecessary.
+
+   Nothing else on the set is affected by the tunnel: `avahi-daemon`
+   (AirPlay/HomeKit), `chromecast-provisioning`, `miracast`, `appcasting`,
+   `connman` all active; no faultmanager detections; no crashd or rdxd
+   history; the three failed units (`broadcast-configd`, `f2io-on`, `gibbs`)
+   are tuner one-shots that fail at 12-18 s, before the tunnel exists.
 
 Measured after both: three power-off / wake cycles of 150 s each with no
 reboot, uptime carrying across, the same compositor still running, and Home

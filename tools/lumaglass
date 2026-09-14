@@ -1149,8 +1149,9 @@ standby_mode() {
   # rather than from anything stored here. "warm": stays in active standby
   # with RAM alive and powers on instantly with the mod still up. "cold":
   # powers fully down and every power-on is a boot. "system": Quick Start+
-  # is on but SDDP is still enabled, so the first wake will crash webos-sddp
-  # and the power-off after that will reboot - the stock state.
+  # is on but SDDP is still enabled - the stock state, which on a set with a
+  # VPN tun interface means webos-sddp crashes on the next network change and
+  # the power-off after that reboots.
   qs=$(get_option_setting quickStartMode)
   sddp=$(get_option_setting enableSDDP)
   if [ "$qs" != "on" ]; then
@@ -1166,9 +1167,13 @@ verb_standby() {
   # Two things decide whether a power-off leaves the set warm: Quick Start+
   # (LG's own "keep it in RAM" mode) and the absence of a crash report when
   # faultmanager looks. The report this mod's own restart produces is always
-  # swept; the one webos-sddp leaves on the first wake is not this mod's, so
-  # it is handled by not starting webos-sddp, through the set's own
-  # enableSDDP setting. The previous value is kept so "cold" restores it.
+  # swept. The other one seen is webos-sddp (Control4 discovery), which
+  # segfaults in SDDPSetDevice whenever it reads the interface list and finds
+  # a point-to-point interface with the multicast flag - a Tailscale tun on
+  # the reference set; proven by stopping tailscaled, after which it runs. A
+  # stock set has no such interface. It is handled by not starting it, through
+  # the set's own enableSDDP setting; the previous value is kept so "cold"
+  # restores it.
   action="${1:-}"
   cfg_read_all
   case "$action" in
