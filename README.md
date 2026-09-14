@@ -50,7 +50,7 @@ Launch **LumaGlass** from the Homebrew Channel. The app provides:
 
 - **Apply**: Install the mod (mounts compositor QML and Home app assets, restarts services)
 - **Revert**: Remove the mod (unmounts everything, restores original app icons, restarts services)
-- **Persist** (on/off): Keep the mod applied across reboots (persists state to `/var/lib/lumaglass/`)
+- **Persist** (on/off): Keep the mod applied across reboots (persists state to `/var/lib/lumaglass/`, and installs the early boot hook described below)
 - **FPS** (on/off): Enable compositor FPS debug overlay (for development)
 - **Notify**: Configure optional ntfy.sh integration for status/alerts (requires internet + token)
 - **Status**: Show current mod state, version, applied mounts, and configuration
@@ -77,6 +77,21 @@ A merged copy of the stock Home app assets directory with overlaid modifications
 - Requires termination of the Home app and a relaunch to take effect
 
 The mod state and configuration live in `/var/lib/lumaglass/`, which persists across reboots if persistence is enabled.
+
+### Boot timing
+
+The set resumes a hibernation image rather than cold-booting, and the
+compositor inside it starts at 2.63s. It cannot load the modded QML: `/var`
+does not show the writable filesystem until `mount-readwrite.service` at
+12.96s, so the compositor unit's optional `EnvironmentFile` under `/var` is
+not a path that exists yet. One compositor restart per boot is therefore
+structural, and ~13s is the floor for applying anything.
+
+With persistence on, the apply runs from a PATH shim in front of `grep` for
+`kdump.service` (starts 14.2s) rather than waiting for Homebrew Channel's
+`init.d` run-parts at ~33s. The modded home reaches the panel at ~33s, and
+stock Home never paints first. Homebrew Channel's hook remains as the
+fallback if the early apply fails.
 
 ## Firmware Compatibility
 

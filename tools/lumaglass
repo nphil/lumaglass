@@ -53,13 +53,19 @@ BG_4K_SRC="$APPDIR/payload/wallpaper/bg_4k.png"
 # swapped in, and point the import path at it. Nothing of ours is mounted over
 # /usr, which is an overlay with lowerdir only and can never be written.
 #
-# The intent was for the compositor's first start to load the modded QML with
-# no restart at all. It does not: measured across consecutive boots, the first
-# start takes the global DefaultEnvironment from
-# /etc/systemd/system.conf.d/30-webos-global.conf instead of our
-# EnvironmentFile, though the same file applies to every later restart. So one
-# restart per boot is still the norm; apply forces it whenever the running
-# compositor lacks the shadow.
+# The compositor's first start can never load the modded QML, and the reason
+# is not the import path but the filesystem: until
+# mount-readwrite.service (12.96s measured) relocates it, /var does not show
+# the writable ext4 subtree at all, so /var/systemd/system/env is simply not
+# a path that exists yet. surface-manager-daemon starts at 2.63s, its
+# EnvironmentFile is optional, and the read is therefore a silent no-op - the
+# file's atime is untouched across a boot, and LG's own env files for
+# ls-hubd, configd, memchute, tvpowerd, bootd and sam are equally inert that
+# early. Every restart after ~13s picks the file up reliably.
+#
+# So one compositor restart per boot is structural, not a bug to be fixed:
+# apply forces it whenever the running compositor lacks the shadow. What can
+# be bought is when it happens - see the early boot hook below.
 #
 # A compositor restart is not just a visible flash. It makes LG's igallery
 # preview segfault in QFontDatabase::removeAllApplicationFonts (reproducible
@@ -95,12 +101,41 @@ HOME_LAUNCH_URI="luna://com.webos.applicationManager/launch"
 HOME_LAUNCH_PARAMS='{"id":"com.webos.app.home"}'
 SURFACE_SVC=surface-manager-daemon.service
 MSGLOG=/var/log/messages
-# Seconds to wait after the compositor reports active before launching Home.
-# Measured: 14s is reliable on webOS 10.2.1; shorter leaves a black screen.
-SURFACE_SETTLE=14
+# A compositor that reports active is not yet presenting. Every cheap signal -
+# is-active, the Home process, getForegroundAppInfo, NL_HOME_SHOWN - goes true
+# about 8s before anything reaches the panel, so readiness is taken from the
+# panel itself: capture a small frame and look at how much PNG came back.
+# Measured on webOS 10.2.1 at 320x180: 835 bytes while the panel is still
+# blank, >79000 once Home is composited.
+CAPTURE_URI="luna://com.webos.service.capture/executeOneShot"
+CAP_TMP=/tmp/lumaglass-ready.png
+CAP_BLANK_BYTES=4096
+READY_WAIT=30
 SCREEN_ON_URI="luna://com.webos.service.tvpower/power/turnOnScreen"
 AUTOSTART_LINK=/var/lib/webosbrew/init.d/50-lumaglass
 AUTOSTART_SRC="$APPDIR/tools/autostart.sh"
+
+# Early boot hook.
+#
+# Homebrew Channel's init.d run-parts is the obvious place to apply from, but
+# it fires at ~33s, long after the panel is live, which is what made a boot
+# show stock Home, blink, and only then the mod. The earliest a root
+# customization can do anything useful is just after mount-readwrite.service
+# (12.96s measured), because until then /var shows the firmware's near-empty
+# var, not the writable one: that is also why the compositor's own
+# EnvironmentFile cannot work at its first start (2.6s) - the file is simply
+# not visible on that path yet, so systemd's optional read is a no-op.
+#
+# kdump.service is the hook: it starts at 14.27s, right inside that window, it
+# reads an EnvironmentFile under /var so PATH can be set for it, and its
+# script's first act is a bare `grep`. On a set without `crashkernel` on the
+# kernel command line - this one - the script is a no-op that exits 0, and the
+# unit is Restart=no, so shadowing one command in it costs nothing. The shim
+# always exec's the real grep, so a broken shim cannot stop the unit.
+EARLY_ENV_FILE=/var/systemd/system/env/kdump.env
+EARLY_BIN="$STATE/earlybin"
+EARLY_SHIM="$EARLY_BIN/grep"
+EARLY_ONCE=/tmp/.lumaglass-early-done
 LOCKFILE=/var/lib/lumaglass/mutate.lock
 # Seconds a second mutation waits for the first to finish. An apply takes ~30s
 # at worst, so this is generous without hanging a caller forever.
@@ -183,18 +218,42 @@ home_running() {
   return 1
 }
 
+panel_presenting() {
+  # Whether anything is actually on the panel, asked of the panel itself.
+  b=$(luna-send -n 1 "$CAPTURE_URI" \
+        "{\"path\":\"$CAP_TMP\",\"method\":\"DISPLAY\",\"format\":\"PNG\",\"width\":320,\"height\":180}" \
+        2>/dev/null | tr ',' '\n' | grep writtenBytes | tr -dc '0-9')
+  [ -n "$b" ] || return 1
+  [ "$b" -gt "$CAP_BLANK_BYTES" ]
+}
+
+wait_presenting() {
+  # Bounded wait for real pixels. Returns 1 on timeout so the caller can say
+  # so, but a timeout is not an error: a boot into standby never presents.
+  # Deliberately not `i`: this runs inside relaunch_home's own loop, and sh
+  # has no locals, so sharing the name ended that loop early and logged a
+  # nonsense attempt count.
+  waited=0
+  while [ "$waited" -lt "$READY_WAIT" ]; do
+    panel_presenting && return 0
+    sleep 1
+    waited=$((waited+1))
+  done
+  return 1
+}
+
 relaunch_home() {
-  # Sequence and pacing both matter, and both were established empirically:
-  #
-  #   turnOnScreen, then ONE launch, then let it settle.
+  # One launch, then wait for pixels.
   #
   # Hammering launch requests every couple of seconds while the compositor is
-  # still coming up leaves the panel black indefinitely, even though the Home
-  # process exists, the log has already printed NL_HOME_SHOWN, and
-  # getForegroundAppInfo already reports com.webos.app.home. All three of
-  # those signals go true well before anything is actually composited, so none
-  # of them can be used as the readiness gate - only patience works. The
-  # caller is responsible for the post-restart settle before calling this.
+  # still coming up leaves the panel black indefinitely, so there is still
+  # exactly one launch per attempt. What changed is the gate: the Home
+  # process, NL_HOME_SHOWN and getForegroundAppInfo all go true about 8s
+  # before anything is composited, so none of them can end the wait, but a
+  # captured frame can. Measured: content reaches the panel 12s after a
+  # restart, and launching Home immediately does not delay it - the old
+  # sequence slept 14s before even asking for Home, then slept 8s more.
+  #
   # turnOnScreen exists for the interactive path: a compositor restart can
   # leave the panel blanked, and the user asked for the screen. On the boot
   # path it is wrong: after a crash-recovery "reboot to suspend" the set is
@@ -205,9 +264,14 @@ relaunch_home() {
   while [ "$i" -lt 3 ]; do
     [ "${LUMAGLASS_BOOT:-0}" = "1" ] || luna-send -n 1 "$SCREEN_ON_URI" '{}' >/dev/null 2>&1
     luna-send -n 1 "$HOME_LAUNCH_URI" "$HOME_LAUNCH_PARAMS" >/dev/null 2>&1
-    sleep 8
+    if wait_presenting; then
+      log_line "home on panel after $i relaunch attempt(s)"
+      return 0
+    fi
     if home_running; then
-      log_line "home up after $i relaunch attempt(s)"
+      # Running but nothing on the panel: the set is booting into standby, or
+      # the panel is off. Nothing more to wait for.
+      log_line "home up after $i relaunch attempt(s), panel not presenting"
       return 0
     fi
     i=$((i+1))
@@ -229,19 +293,20 @@ wait_surface_active() {
 }
 
 restart_surface() {
-  # Restarting the compositor is now the exception, not the rule: the modded
-  # QML normally arrives through the import path when the compositor first
-  # starts. When a restart is genuinely unavoidable (an interactive apply
-  # while the panel is live), it makes LG stock apps segfault on teardown and
-  # arms tvpowerd's reboot-to-suspend, so snapshot the crash reports first and
-  # remove the ones this restart adds.
+  # A restart is how the modded QML reaches the screen: the compositor's first
+  # start at 2.6s cannot see our EnvironmentFile, because /var does not yet
+  # show the writable filesystem that early. It makes LG stock apps segfault
+  # on teardown and arms tvpowerd's reboot-to-suspend, so snapshot the crash
+  # reports first and remove the ones this restart adds.
+  #
+  # No settle here. is-active goes true almost immediately (Type=notify), long
+  # before a frame can be presented, but the caller launches Home straight
+  # away and then waits on the panel, which is the only honest gate. Measured:
+  # asking for Home at +4s still put content up at +12s, so sleeping first
+  # bought nothing and cost 14s.
   reports_before=$(snapshot_reports)
   systemctl restart "$SURFACE_SVC" >/dev/null 2>&1
   wait_surface_active || return 1
-  # is-active goes true almost immediately (Type=notify), long before the
-  # compositor can present a frame. Without this settle the subsequent Home
-  # launch is accepted and then never composited, leaving a black screen.
-  sleep "$SURFACE_SETTLE"
   disarm_restart_crashes "$reports_before"
   return 0
 }
@@ -532,6 +597,9 @@ do_revert_internal() {
   # not the restart below succeeds.
   if [ -f "$ENV_FILE" ]; then REVERT_CHANGED=1; fi
   remove_env
+  # Nothing of ours should run on the boot path after a revert, including the
+  # PATH shim kdump.service would otherwise resolve.
+  remove_early_hook
   if [ -d "$SHADOW_ROOT" ]; then REVERT_CHANGED=1; fi
   rm -rf "$SHADOW_ROOT" "$SHADOW_ROOT.next" "$SHADOW_ROOT.old" 2>/dev/null
   rm -f "$SHADOW_STOCK_FP" "$SHADOW_SELF_FP" 2>/dev/null
@@ -729,14 +797,10 @@ verb_apply() {
   # 6. Bring the change on screen.
   #
   # The compositor only reads QML at startup, so the shadow reaches the screen
-  # when it next starts. The env override is meant to make that its very first
-  # start at boot+2s, and it does apply reliably to any restart - but it has
-  # been observed NOT to apply to the first start at boot, on consecutive
-  # boots, even though var.mount completes at 1.946s and
-  # surface-manager-daemon does not start until 2.591s, so the file was there
-  # to be read. Cause not established. Whatever it is, correctness cannot
-  # depend on it: if the compositor that is running does not have the shadow,
-  # restart it.
+  # when it next starts, and its first start at boot+2.6s cannot see the env
+  # file (see the constants block: /var is not the writable filesystem that
+  # early). So the restart is the mechanism, not a fallback: if the compositor
+  # that is running does not have the shadow, restart it.
   #
   # Deliberately NOT gated on panel_is_active. That gate was here to avoid
   # racing a power transition, and it silently abandoned the restart instead:
@@ -789,17 +853,11 @@ verb_apply() {
 # ---------------------------------------------------------------- boot-bind
 
 verb_boot_bind() {
-  # The boot hook's opening move. The env file persists in /var, so the
-  # compositor's first start is meant to load the shadow with no restart.
-  # Measured, it does not: on consecutive boots the compositor came up on the
-  # global DefaultEnvironment value from
-  # /etc/systemd/system.conf.d/30-webos-global.conf rather than our
-  # EnvironmentFile, even though the file was readable by then - var.mount
-  # completes at 1.946s and surface-manager-daemon does not start until
-  # 2.591s. The same file applies reliably to any later restart. Cause not
-  # established, so nothing here relies on it: the apply that follows this
-  # restarts the compositor whenever the running one lacks the shadow, which
-  # costs exactly what every boot used to cost and is correct either way.
+  # The boot hook's opening move. The compositor's first start is always
+  # stock - at 2.63s /var is not yet the writable filesystem, so its optional
+  # EnvironmentFile read finds nothing (see the constants block) - and the
+  # apply that follows this restarts it. Binding first matters: the bind is
+  # what Home re-reads, and the restart kills Home anyway.
   #
   # What this does is bind Home's assets - a bind mount does not survive a
   # reboot - and check the two things that can make a persistent env file
@@ -912,14 +970,64 @@ verb_status() {
   if [ "$mounts" -gt 0 ] && env_live && [ -d "$SHADOW_ROOT" ]; then applied=true; else applied=false; fi
   if compositor_has_shadow; then live=true; else live=false; fi
   if [ -L "$AUTOSTART_LINK" ]; then persist=true; else persist=false; fi
+  if early_hook_live; then early=true; else early=false; fi
   fps=$(cfg_get_bool fps); [ "$fps" = "true" ] && fps=true || fps=false
   ntfy_en=$(cfg_get_bool enabled); [ "$ntfy_en" = "true" ] && ntfy_en=true || ntfy_en=false
   ntfy_url_esc=$(json_escape "$(cfg_get_str url)")
   firmware_esc=$(json_escape "$(get_firmware)")
   model_esc=$(json_escape "$(get_model)")
-  printf '{"ok":true,"version":"%s","applied":%s,"live":%s,"mounts":%s,"persist":%s,"fps":%s,"ntfy":{"enabled":%s,"url":"%s"},"firmware":"%s","model":"%s"}\n' \
-    "$version" "$applied" "$live" "$mounts" "$persist" "$fps" "$ntfy_en" "$ntfy_url_esc" "$firmware_esc" "$model_esc"
+  printf '{"ok":true,"version":"%s","applied":%s,"live":%s,"mounts":%s,"persist":%s,"early":%s,"fps":%s,"ntfy":{"enabled":%s,"url":"%s"},"firmware":"%s","model":"%s"}\n' \
+    "$version" "$applied" "$live" "$mounts" "$persist" "$early" "$fps" "$ntfy_en" "$ntfy_url_esc" "$firmware_esc" "$model_esc"
   return 0
+}
+
+# --------------------------------------------------------- early boot hook
+
+install_early_hook() {
+  # PATH for kdump.service, plus the shim it will resolve `grep` to.
+  mkdir -p "$EARLY_BIN" "$(dirname "$EARLY_ENV_FILE")" 2>/dev/null || return 1
+  {
+    printf '%s\n' '#!/bin/sh'
+    printf '%s\n' '# LumaGlass early boot trigger, installed as a PATH shim in front of grep'
+    printf '%s\n' '# for kdump.service only. It starts the apply ~19s earlier than Homebrew'
+    printf '%s\n' "# Channel's init.d run-parts can, then behaves exactly like grep."
+    printf '%s\n' '#'
+    printf '%s\n' '# Absolute paths throughout: this shim is first on PATH, so a bare grep'
+    printf '%s\n' '# here would re-enter it. Every path still ends in exec, so nothing here'
+    printf '%s\n' '# can stop the unit that called it.'
+    printf 'APPDIR=%s\n' "$APPDIR"
+    printf 'STATE=%s\n' "$STATE"
+    printf 'ONCE=%s\n' "$EARLY_ONCE"
+    cat <<'SHIM'
+if [ ! -e "$ONCE" ]; then
+  : > "$ONCE" 2>/dev/null
+  if /bin/grep -q '"persist"[[:space:]]*:[[:space:]]*true' "$STATE/config.json" 2>/dev/null; then
+    if [ -x "$APPDIR/tools/autostart.sh" ]; then
+      PATH=/usr/sbin:/usr/bin:/sbin:/bin \
+        /usr/bin/setsid "$APPDIR/tools/autostart.sh" --worker </dev/null >/dev/null 2>&1 &
+    fi
+  fi
+fi
+exec /bin/grep "$@"
+SHIM
+  } > "$EARLY_SHIM.tmp.$$" || return 1
+  chmod 0755 "$EARLY_SHIM.tmp.$$" 2>/dev/null
+  mv -f "$EARLY_SHIM.tmp.$$" "$EARLY_SHIM" 2>/dev/null || return 1
+  printf 'PATH=%s:/usr/sbin:/usr/bin:/sbin:/bin\n' "$EARLY_BIN" > "$EARLY_ENV_FILE.tmp.$$" || return 1
+  mv -f "$EARLY_ENV_FILE.tmp.$$" "$EARLY_ENV_FILE" 2>/dev/null || return 1
+  sync
+  return 0
+}
+
+remove_early_hook() {
+  rm -f "$EARLY_ENV_FILE" "$EARLY_ENV_FILE.tmp."* 2>/dev/null
+  rm -rf "$EARLY_BIN" 2>/dev/null
+  return 0
+}
+
+early_hook_live() {
+  [ -f "$EARLY_ENV_FILE" ] && [ -x "$EARLY_SHIM" ] \
+    && grep -qF "$EARLY_BIN" "$EARLY_ENV_FILE" 2>/dev/null
 }
 
 # ------------------------------------------------------------------ persist
@@ -935,9 +1043,15 @@ verb_persist() {
         return 1
       fi
       set_cfg_bool persist true
+      # The init.d symlink is the safety net; the early hook is what makes a
+      # boot fast. Its absence is not fatal - the late hook still applies.
+      if ! install_early_hook; then
+        log_line "persist: early hook could not be installed, late hook only"
+      fi
       ;;
     off)
       rm -f "$AUTOSTART_LINK" 2>/dev/null
+      remove_early_hook
       set_cfg_bool persist false
       ;;
     *)
