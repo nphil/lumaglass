@@ -51,6 +51,7 @@ Launch **LumaGlass** from the Homebrew Channel. The app provides:
 - **Apply**: Install the mod (mounts compositor QML and Home app assets, restarts services)
 - **Revert**: Remove the mod (unmounts everything, restores original app icons, restarts services)
 - **Persist** (on/off): Keep the mod applied across reboots (persists state to `/var/lib/lumaglass/`, and installs the early boot hook described below)
+- **Instant on** (on/off): Stay in RAM while off so power-on is instant with the mod already up, or power fully down (see Standby below)
 - **FPS** (on/off): Enable compositor FPS debug overlay (for development)
 - **Notify**: Configure optional ntfy.sh integration for status/alerts (requires internet + token)
 - **Status**: Show current mod state, version, applied mounts, and configuration
@@ -92,6 +93,25 @@ With persistence on, the apply runs from a PATH shim in front of `grep` for
 `init.d` run-parts at ~33s. The modded home reaches the panel at ~33s, and
 stock Home never paints first. Homebrew Channel's hook remains as the
 fallback if the early apply fails.
+
+### Standby
+
+A full boot only happens when the set has gone cold. After power-off it
+enters active standby with RAM alive, and a power-on from there is instant,
+with the mod still on screen. What used to force it cold was faultmanager: any
+crash report under `/tmp/var/log/reports/librdx` at power-off makes it answer
+the suspend request with `rebootToSuspend`, and the set reboots about 6s
+after entering standby. The compositor restart provokes exactly one such
+report (inputcommon's teardown), which the apply now removes.
+
+One report is not this mod's. `webos-sddp`, LG's Control4 discovery service,
+crashes on the first wake from active standby on this firmware, and its
+report arms the same reboot at the next power-off. The **Instant on** toggle
+(`standby warm`) turns Quick Start+ on and `enableSDDP` off, remembering the
+previous value; turning it off (`standby cold`) turns Quick Start+ off and
+restores SDDP. Warm: instant power-on with the mod already up, higher
+standby draw, no Control4 discovery. Cold: lowest standby draw, a ~35s boot
+at every power-on. `status` reports the live mode as `standby`.
 
 ## Firmware Compatibility
 
@@ -156,6 +176,12 @@ To release a new version:
 2. Update `CHANGELOG.md`
 3. Commit and tag: `git tag v0.2.0 && git push --tags`
 4. The release workflow creates the GitHub Release and updates `repo.json` automatically
+
+`docs/HANDOFF.md` is the engineering record: the measured boot and standby
+mechanisms on the reference set, what was tried and why it is dead, and how
+to measure again. `docs/research/` holds the survey of other rooted-webOS
+home replacements, and `docs/evidence/` the frame captures the measurements
+rest on.
 
 ## Reverting/Uninstalling
 

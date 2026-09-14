@@ -92,8 +92,9 @@
     mounts: 0,
     persist: false,
     fps: false,
+    standby: 'system',
     ntfy: { enabled: false, url: '' },
-    version: '0.3.3',
+    version: '0.3.5',
     firmware: '10.2.1',
     model: 'HE_DTV_W24G_AFABATAA'
   };
@@ -119,6 +120,7 @@
         mounts: mockState.mounts,
         persist: mockState.persist,
         fps: mockState.fps,
+        standby: mockState.standby,
         ntfy: mockState.ntfy,
         firmware: mockState.firmware,
         model: mockState.model
@@ -153,6 +155,12 @@
     } else if (cmd.includes('fps off')) {
       mockState.fps = false;
       stdoutString = JSON.stringify({ ok: true, fps: false });
+    } else if (cmd.includes('standby warm')) {
+      mockState.standby = 'warm';
+      stdoutString = JSON.stringify({ ok: true, standby: 'warm' });
+    } else if (cmd.includes('standby cold')) {
+      mockState.standby = 'cold';
+      stdoutString = JSON.stringify({ ok: true, standby: 'cold' });
     } else if (cmd.includes('ntfy set')) {
       const match = cmd.match(/ntfy set (.+)$/);
       if (match) {
@@ -209,6 +217,7 @@
     logClose: document.getElementById('log-close'),
     togglePersist: document.getElementById('toggle-persist'),
     toggleFps: document.getElementById('toggle-fps'),
+    toggleStandby: document.getElementById('toggle-standby'),
     ntfySub: document.getElementById('ntfy-sub')
   };
 
@@ -324,6 +333,7 @@
     // Update toggles
     dom.togglePersist.setAttribute('data-on', state.status.persist ? 'true' : 'false');
     dom.toggleFps.setAttribute('data-on', state.status.fps ? 'true' : 'false');
+    dom.toggleStandby.setAttribute('data-on', state.status.standby === 'warm' ? 'true' : 'false');
     dom.ntfySub.textContent = state.status.ntfy?.enabled ? state.status.ntfy.url : 'off';
   }
 
@@ -422,6 +432,24 @@
       await refreshStatus();
     } catch (err) {
       showError('FPS toggle failed: ' + err.message);
+    } finally {
+      state.isExecuting = false;
+    }
+  }
+
+  async function onStandbyToggle() {
+    if (state.isExecuting) return;
+    state.isExecuting = true;
+
+    // "system" (Quick Start+ on, SDDP still enabled) is the stock state and
+    // reads as off: the first wake crashes webos-sddp and the next power-off
+    // reboots, so it is not instant-on in practice.
+    const warm = state.status.standby === 'warm';
+    try {
+      await cli('standby', warm ? 'cold' : 'warm');
+      await refreshStatus();
+    } catch (err) {
+      showError('Instant on toggle failed: ' + err.message);
     } finally {
       state.isExecuting = false;
     }
@@ -534,6 +562,7 @@
   document.getElementById('row-revert').addEventListener('click', onRevert);
   document.getElementById('row-persist').addEventListener('click', onPersistToggle);
   document.getElementById('row-fps').addEventListener('click', onFpsToggle);
+  document.getElementById('row-standby').addEventListener('click', onStandbyToggle);
   document.getElementById('row-ntfy').addEventListener('click', onNtfyOpen);
   document.getElementById('row-ntfy-test').addEventListener('click', onNtfyTest);
   document.getElementById('row-log').addEventListener('click', onViewLog);
