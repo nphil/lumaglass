@@ -282,6 +282,34 @@ FocusScope {
     ShaderEffectSource { id: dockMaskSrc; sourceItem: dockMask; visible: false; live: true }
     GaussianBlur { id: dockMaskBlur; width: 960; height: 130; source: dockMaskSrc; radius: 5; samples: 11; visible: false }
     ShaderEffectSource { id: dockBlurSrc; sourceItem: dockMaskBlur; visible: false; live: true }
+    // Per texel of the mask: how many texels of tile continue to the left, right, up
+    // and down. Together they give the rectangle of the tile a pixel belongs to, which
+    // is what lets an inset icon be zoomed to fill its tile. Scans are bounded by the
+    // largest tile (focused, scaled: ~150px = 75 texels) and stop at the first gap.
+    ShaderEffect {
+        id: dockExt
+        width: 960; height: 130
+        visible: false
+        property variant mask: dockMaskSrc
+        property real tx: 1.0 / width
+        property real ty: 1.0 / height
+        fragmentShader: "
+            varying highp vec2 qt_TexCoord0;
+            uniform sampler2D mask;
+            uniform lowp float qt_Opacity;
+            uniform highp float tx;
+            uniform highp float ty;
+            void main() {
+                if (texture2D(mask, qt_TexCoord0).r < 0.5) { gl_FragColor = vec4(0.0, 0.0, 0.0, 1.0); return; }
+                highp float dl = 0.0, dr = 0.0, du = 0.0, dd = 0.0;
+                for (int i = 1; i <= 80; i++) { if (texture2D(mask, qt_TexCoord0 - vec2(float(i) * tx, 0.0)).r < 0.5) break; dl += 1.0; }
+                for (int i = 1; i <= 80; i++) { if (texture2D(mask, qt_TexCoord0 + vec2(float(i) * tx, 0.0)).r < 0.5) break; dr += 1.0; }
+                for (int i = 1; i <= 80; i++) { if (texture2D(mask, qt_TexCoord0 - vec2(0.0, float(i) * ty)).r < 0.5) break; du += 1.0; }
+                for (int i = 1; i <= 80; i++) { if (texture2D(mask, qt_TexCoord0 + vec2(0.0, float(i) * ty)).r < 0.5) break; dd += 1.0; }
+                gl_FragColor = vec4(dl, dr, du, dd) / 100.0;
+            }"
+    }
+    ShaderEffectSource { id: dockExtSrc; sourceItem: dockExt; visible: false; live: true; smooth: false }
     // The widget layer is composited by homeKey, and only into scaffold pixels, so
     // nothing Home draws itself - icons, focus rings, its edit page - can end up under a
     // widget.
@@ -852,6 +880,7 @@ lowp float isW(highp vec2 uv) { lowp vec4 s = texture2D(src, uv); return step(0.
         property real editDim: 0.22
         // dock tile treatment (see dockMask): band it covers, mask texel size
         property variant dockBlur: dockBlurSrc
+        property variant dockExtT: dockExtSrc
         property real bandY: dockMask.bandY
         property real bandH: dockMask.bandH
         property real mpx: 1.0 / dockMask.width
@@ -917,6 +946,7 @@ lowp float isW(highp vec2 uv) { lowp vec4 s = texture2D(src, uv); return step(0.
             uniform sampler2D widgets;
             uniform highp float editDim;
             uniform sampler2D dockBlur;
+            uniform sampler2D dockExtT;
             uniform highp float bandY;
             uniform highp float bandH;
             uniform highp float mpx;
@@ -994,9 +1024,64 @@ lowp float isW(highp vec2 uv) { lowp vec4 s = texture2D(src, uv); return step(0.
                 lowp vec4 w;
                 if (edit > 0.5) w = vec4(texture2D(wallb, qt_TexCoord0).rgb * editDim, 1.0);  // edit page: dim blurred backdrop, no glass
                 else            w = texture2D(wall, qt_TexCoord0);                             // pre-baked wallpaper + static glass
-                lowp float isBlack = step(max(c.r, max(c.g, c.b)), 0.003) * step(0.5, c.a);
-                lowp vec4 col = mix(c, w, isBlack);
                 lowp float inRail = step(qt_TexCoord0.x, 0.082) * step(qt_TexCoord0.y, 0.42) * (1.0 - edit);
+                // ---- app tiles: zoom an inset icon to fill its tile ----
+                // LG pads square artwork with a flat tileBg frame (measured 5-6px). With the tile's
+                // rectangle known from dockExt, the frame width is read off the top edge's midpoint
+                // and, if the artwork is a full square (all four inset corners are artwork, not
+                // frame - a round icon fails this and keeps its field), the artwork is remapped to
+                // fill the tile. zc/zk hold that mapping so every later tap into src uses it.
+                highp float bandT = (qt_TexCoord0.y - bandY) / bandH;
+                lowp float inBand = step(0.0, bandT) * step(bandT, 1.0) * (1.0 - edit) * (1.0 - inRail);
+                highp vec2 zc = qt_TexCoord0;
+                highp vec2 zk = vec2(1.0);
+                highp vec2 muv = vec2(qt_TexCoord0.x, bandT);
+                highp float tileInterior = 0.0;   // 1 when the pixel's mask texel is inside a tile, not on its rim
+                highp vec4 ext = vec4(0.0);
+                if (inBand > 0.5) ext = floor(texture2D(dockExtT, muv) * 100.0 + 0.5);
+                if (dot(ext, vec4(1.0)) > 0.5) {
+                    tileInterior = step(1.0, min(min(ext.r, ext.g), min(ext.b, ext.a)));
+                    // anchored on the mask texel's centre, not the pixel, so both pixels of a
+                    // texel derive the same rectangle
+                    highp float txc = (floor(qt_TexCoord0.x / mpx) + 0.5) * mpx;
+                    highp float tyc = bandY + (floor(bandT / mpy) + 0.5) * mpy * bandH;
+                    highp float L = txc - (ext.r + 0.5) * mpx;
+                    highp float R = txc + (ext.g + 0.5) * mpx;
+                    highp float T = tyc - (ext.b + 0.5) * mpy * bandH;
+                    highp float B = tyc + (ext.a + 0.5) * mpy * bandH;
+                    highp vec2 cen = vec2((L + R) * 0.5, (T + B) * 0.5);
+                    highp float fw = 0.0;
+                    for (int k = 2; k <= 12; k += 2) {
+                        lowp vec3 t = texture2D(src, vec2(cen.x, T + float(k) * py)).rgb;
+                        if (length(t - tileBgV) > 0.035 && max(t.r, max(t.g, t.b)) > 0.003) { fw = float(k); break; }
+                    }
+                    if (fw >= 4.0) {
+                        // 8px inside the artwork's edge: inside a square with corner radius up to ~27px,
+                        // well outside a disc that fills the tile
+                        highp float ci = (fw + 8.0);
+                        lowp vec3 c1 = texture2D(src, vec2(L + ci * px, T + ci * py)).rgb;
+                        lowp vec3 c2 = texture2D(src, vec2(R - ci * px, T + ci * py)).rgb;
+                        lowp vec3 c3 = texture2D(src, vec2(L + ci * px, B - ci * py)).rgb;
+                        lowp vec3 c4 = texture2D(src, vec2(R - ci * px, B - ci * py)).rgb;
+                        highp float sq = step(0.035, length(c1 - tileBgV)) * step(0.035, length(c2 - tileBgV))
+                                       * step(0.035, length(c3 - tileBgV)) * step(0.035, length(c4 - tileBgV));
+                        if (sq > 0.5) {
+                            // the outer pixel keeps its coverage against the scaffold, so the tile's own
+                            // antialiased outline survives the zoom
+                            highp float rimTexel = step(min(min(ext.r, ext.g), min(ext.b, ext.a)), 0.5);
+                            highp float ocov = mix(1.0, clamp(max(c.r, max(c.g, c.b)) / max(tileBgV.r, max(tileBgV.g, tileBgV.b)), 0.0, 1.0), rimTexel);
+                            highp float inset = (fw + 1.0);
+                            zc = cen;
+                            zk = vec2(((R - L) - 2.0 * inset * px) / (R - L), ((B - T) - 2.0 * inset * py) / (B - T));
+                            lowp vec4 cz = texture2D(src, zc + (qt_TexCoord0 - zc) * zk);
+                            c = vec4(cz.rgb * ocov, cz.a);
+                        }
+                    }
+                }
+                // Scaffold keying stops inside a tile: a pure-black pixel there is artwork (an
+                // outline, a black field), not the scaffold, and must not show the wallpaper.
+                lowp float isBlack = step(max(c.r, max(c.g, c.b)), 0.003) * step(0.5, c.a) * (1.0 - tileInterior);
+                lowp vec4 col = mix(c, w, isBlack);
                 if (inRail > 0.5) {
                     highp float hn = fract(sin(dot(gl_FragCoord.xy, vec2(12.9898, 78.233))) * 43758.5453);
                     highp float sat = max(c.r, max(c.g, c.b)) - min(c.r, min(c.g, c.b));
@@ -1038,16 +1123,12 @@ lowp float isW(highp vec2 uv) { lowp vec4 s = texture2D(src, uv); return step(0.
                         }
                     }
                 }
-                // ---- app tiles ----
-                // Each tile is LG's flat background (tileBg) with the app's artwork on it; where the
-                // artwork is inset or has its own corners, that flat colour shows as a frame. Here
-                // the background becomes a glass slab (same material as the widget cards), the
-                // edge is re-blended over the wallpaper instead of the black scaffold LG
-                // antialiased against, and the slab gets a lit bevel and casts a shadow. Artwork
-                // is never touched.
-                highp float bandT = (qt_TexCoord0.y - bandY) / bandH;
-                if (bandT > 0.0 && bandT < 1.0 && edit < 0.5 && inRail < 0.5) {
-                    highp vec2 muv = vec2(qt_TexCoord0.x, bandT);
+                // ---- app tiles: material ----
+                // Whatever tileBg is still visible after the zoom (a round icon's field, a gap
+                // the artwork does not cover) becomes a glass slab in the widget-card material;
+                // artwork edges are re-blended over the wallpaper instead of the black scaffold LG
+                // antialiased against; every tile gets a lit bevel and casts a shadow.
+                if (inBand > 0.5) {
                     highp float m = texture2D(dockBlur, muv).r;
                     if (isBlack > 0.5) {
                         highp float sh = texture2D(dockBlur, muv - vec2(0.0, 5.0 * mpy)).r;
@@ -1055,7 +1136,7 @@ lowp float isW(highp vec2 uv) { lowp vec4 s = texture2D(src, uv); return step(0.
                     } else {
                         // coverage against tileBg: an edge pixel is tileBg scaled by its AA coverage
                         highp float cov = clamp(max(c.r, max(c.g, c.b)) / max(tileBgV.r, max(tileBgV.g, tileBgV.b)), 0.0, 1.0);
-                        highp float bgMatch = (1.0 - smoothstep(0.02, 0.06, length(c.rgb - tileBgV * cov))) * step(0.15, cov);
+                        highp float bgMatch = (1.0 - smoothstep(0.008, 0.02, length(c.rgb - tileBgV * cov))) * step(0.15, cov);
                         // inward direction from the field's gradient; zero deep inside a tile
                         highp float gx = texture2D(dockBlur, muv + vec2(mpx, 0.0)).r - texture2D(dockBlur, muv - vec2(mpx, 0.0)).r;
                         highp float gy = texture2D(dockBlur, muv + vec2(0.0, mpy)).r - texture2D(dockBlur, muv - vec2(0.0, mpy)).r;
@@ -1066,25 +1147,26 @@ lowp float isW(highp vec2 uv) { lowp vec4 s = texture2D(src, uv); return step(0.
                         highp float z = sqrt(max(0.0, 1.0 - e * e));
                         if (bgMatch > 0.001) {
                             highp vec2 off = inw * (1.0 - z) * 0.005 * vec2(1.0 / aspect, 1.0);
-                            lowp vec3 gb = texture2D(wallb, qt_TexCoord0 + off).rgb;
-                            gb = mix(gb, tintV, glassTintAmount);
-                            gb = mix(gb, vec3(1.0), 0.08);
-                            col.rgb = mix(col.rgb, gb * cov + w.rgb * (1.0 - cov), bgMatch);
-                        } else if (e > 0.001) {
-                            // artwork that fills the tile: rebuild its own AA edge over the wallpaper,
+                            lowp vec3 slab = texture2D(wallb, qt_TexCoord0 + off).rgb;
+                            slab = mix(slab, tintV, glassTintAmount);
+                            slab = mix(slab, vec3(1.0), 0.08);
+                            col.rgb = mix(col.rgb, slab * cov + w.rgb * (1.0 - cov), bgMatch);
+                        } else if (m < 0.62) {
+                            // the outermost pixels of artwork: rebuild their AA edge over the wallpaper,
                             // only where the pixel really is the colour 3px inward scaled by coverage
-                            lowp vec4 inner = texture2D(src, qt_TexCoord0 + inw * vec2(3.0 * px, 3.0 * py));
+                            highp vec2 ip = qt_TexCoord0 + inw * vec2(3.0 * px, 3.0 * py);
+                            lowp vec4 inner = texture2D(src, zc + (ip - zc) * zk);
                             highp float acov = clamp(max(c.r, max(c.g, c.b)) / max(max(inner.r, max(inner.g, inner.b)), 0.02), 0.0, 1.0);
-                            highp float wgt = e * (1.0 - smoothstep(0.06, 0.18, length(c.rgb - inner.rgb * acov)));
-                            col.rgb = mix(col.rgb, inner.rgb * acov + w.rgb * (1.0 - acov), wgt);
-                            cov = mix(cov, acov, wgt);
+                            highp float rimW = e * (1.0 - smoothstep(0.06, 0.18, length(c.rgb - inner.rgb * acov)));
+                            col.rgb = mix(col.rgb, inner.rgb * acov + w.rgb * (1.0 - acov), rimW);
+                            cov = mix(cov, acov, rimW);
                         }
                         // bevel: the same lit quarter-round as the widget cards, top-left key light
                         highp vec3 N = normalize(vec3(inw * e * 1.6, z + 0.25));
                         highp vec3 L = normalize(vec3(-0.45, -0.80, 0.55));
                         highp vec3 H = normalize(L + vec3(0.0, 0.0, 1.0));
                         highp float lit = 0.25 + 0.75 * clamp(inw.y, 0.0, 1.0);
-                        highp float spec = pow(max(dot(N, H), 0.0), 48.0) * 0.30 * e * lit;
+                        highp float spec = pow(max(dot(N, H), 0.0), 48.0) * 0.45 * e * lit;
                         highp float fres = pow(1.0 - clamp(N.z, 0.0, 1.0), 3.0) * 0.10 * lit;
                         col.rgb += (spec + fres) * rimV * e * cov;
                     }

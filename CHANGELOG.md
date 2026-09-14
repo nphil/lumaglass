@@ -12,12 +12,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - App tiles in the dock are glass. LG draws each tile as a flat dark
   background with the artwork on it, antialiased against its black
   scaffold; on dark icons that read as a ghost box with a lit hairline
-  around the artwork. The tile background is now the same glass material
-  as the widget cards, its edge is blended over the wallpaper, and it gets
-  a lit bevel and a soft shadow. Artwork pixels are never altered. Tile
+  around the artwork. Square artwork that LG pads with that background
+  (measured 5-6px) is zoomed to fill its tile; artwork that does not fill
+  its tile - a round icon on a field - keeps the background, rendered as
+  the same glass material as the widget cards. Every tile's edge is
+  blended over the wallpaper and gets a lit bevel and a soft shadow. Tile
   geometry is not known to the compositor (the row scrolls and scales), so
-  it is derived per frame from a half-resolution blurred mask of the dock
-  band; measured 60 fps while the row scrolls.
+  it is derived per frame on the GPU: a half-resolution mask of the dock
+  band, blurred for the edge normals and scanned for each tile's
+  rectangle. Measured 60 fps while the row scrolls.
+- Pure-black pixels inside a tile are artwork, not scaffold, and no longer
+  show the wallpaper through them (an outline around glyphs, a black
+  field).
 
 ### Fixed
 
