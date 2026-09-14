@@ -5,6 +5,41 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.5] - 2026-09-14
+
+### Fixed
+
+- The set now stays in active standby after power-off, so a later power-on
+  is instant with the mod already on screen. It never did before: every
+  power-off was a hidden reboot, because the crash report the compositor
+  restart provokes (inputcommon, `QFontDatabase::removeAllApplicationFonts`)
+  was never actually removed. `disarm_restart_crashes` read the names back
+  from `ls`, which word-split them on spaces and printed the 0x02 bytes rdxd
+  uses in place of `/` as `?`; `rm -f` on those names was a no-op that still
+  counted as a success, so "disarmed 9" meant nothing. faultmanager then
+  answered the suspend request with `rebootToSuspend`, and tvpowerd rebooted
+  the set ~6s after it had entered active standby. The sweep now uses
+  pathname expansion, which returns the raw bytes, and runs a second time
+  once Home is back on the panel, since the crash lands ~3s after the
+  restart and can miss the first pass.
+
+  Measured: three power-off / wake cycles of 150s each with no reboot,
+  uptime carrying across, and the same compositor still running.
+
+### Added
+
+- An "Instant on" toggle in the app, `standby warm|cold` in the CLI. Warm
+  turns Quick Start+ on and `enableSDDP` off, remembering the previous SDDP
+  value; cold turns Quick Start+ off and restores it. The tradeoff is the
+  user's: warm means an instant power-on with the mod already up, at the cost
+  of higher standby draw and no Control4 discovery; cold is the lowest
+  standby draw with a ~35s boot at every power-on. `enableSDDP` matters
+  because `webos-sddp` crashes on the first wake from active standby on this
+  firmware, and its crash report arms the same reboot at the next power-off.
+  `status` reports the live mode as `standby`: `warm`, `cold`, or `system`
+  (Quick Start+ on with SDDP still enabled - the stock state, which is not
+  instant-on in practice).
+
 ## [0.3.4] - 2026-09-14
 
 ### Changed

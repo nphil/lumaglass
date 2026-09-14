@@ -7,6 +7,7 @@
 #   revert                 -> drop the env override, unbind, restore icons, back to stock
 #   persist on|off         -> toggle the boot-hook symlink in webosbrew init.d
 #   fps on|off             -> toggle the compositor FPS debug overlay
+#   standby warm|cold      -> Quick Start+ on with webos-sddp off, or fully off
 #   ntfy set <url>|off|test -> configure/test ntfy.sh notifications
 #   log [n]                -> last n log lines (default 20)
 #   version                -> version string from appinfo.json
@@ -311,6 +312,17 @@ restart_surface() {
   return 0
 }
 
+home_back_after_restart() {
+  # Home after a compositor restart, then a second sweep of the crash reports.
+  # The igallery teardown crash lands ~3s after the restart, which is inside
+  # the window wait_surface_active can return in, so the sweep inside
+  # restart_surface may run before there is anything to remove. By the time
+  # Home is on the panel (~12s) it has landed.
+  kill_home_app
+  relaunch_home
+  disarm_restart_crashes "$reports_before"
+}
+
 surface_start_uptime() {
   # Seconds after boot at which the running compositor started, from field 22
   # of /proc/<pid>/stat (clock ticks since boot, CLK_TCK=100 on this kernel).
@@ -372,15 +384,18 @@ take_mutation_lock() {
 # --------------------------------------------------------------- config i/o
 
 write_config() {
-  # $1=fps $2=persist $3=ntfy_enabled $4=ntfy_url  (fps/persist/enabled: true|false)
+  # $1=fps $2=persist $3=ntfy_enabled $4=ntfy_url $5=sddp_prev
+  # (fps/persist/enabled: true|false; sddp_prev: on|off|empty)
   mkdir -p "$STATE" 2>/dev/null
   url_esc=$(json_escape "$4")
+  sddp_esc=$(json_escape "${5:-}")
   tmp="$CONFIG.tmp.$$"
-  printf '{"fps":%s,"ntfy":{"url":"%s","enabled":%s},"persist":%s}\n' "$1" "$url_esc" "$3" "$2" > "$tmp" && mv "$tmp" "$CONFIG"
+  printf '{"fps":%s,"ntfy":{"url":"%s","enabled":%s},"persist":%s,"sddp_prev":"%s"}\n' \
+    "$1" "$url_esc" "$3" "$2" "$sddp_esc" > "$tmp" && mv "$tmp" "$CONFIG"
 }
 
 ensure_config() {
-  [ -f "$CONFIG" ] || write_config false false false ""
+  [ -f "$CONFIG" ] || write_config false false false "" ""
 }
 
 cfg_get_bool() {
@@ -399,6 +414,9 @@ cfg_read_all() {
   CFG_PERSIST=$(cfg_get_bool persist); [ -n "$CFG_PERSIST" ] || CFG_PERSIST=false
   CFG_NTFY_ENABLED=$(cfg_get_bool enabled); [ -n "$CFG_NTFY_ENABLED" ] || CFG_NTFY_ENABLED=false
   CFG_NTFY_URL=$(cfg_get_str url)
+  # What enableSDDP was before `standby warm` turned it off, so `standby cold`
+  # can put it back. Empty when this mod has not touched it.
+  CFG_SDDP_PREV=$(cfg_get_str sddp_prev)
 }
 
 set_cfg_bool() {
@@ -409,13 +427,19 @@ set_cfg_bool() {
     persist) CFG_PERSIST="$2" ;;
     enabled) CFG_NTFY_ENABLED="$2" ;;
   esac
-  write_config "$CFG_FPS" "$CFG_PERSIST" "$CFG_NTFY_ENABLED" "$CFG_NTFY_URL"
+  write_config "$CFG_FPS" "$CFG_PERSIST" "$CFG_NTFY_ENABLED" "$CFG_NTFY_URL" "$CFG_SDDP_PREV"
 }
 
 set_cfg_ntfy_url() {
   cfg_read_all
   CFG_NTFY_URL="$1"
-  write_config "$CFG_FPS" "$CFG_PERSIST" "$CFG_NTFY_ENABLED" "$CFG_NTFY_URL"
+  write_config "$CFG_FPS" "$CFG_PERSIST" "$CFG_NTFY_ENABLED" "$CFG_NTFY_URL" "$CFG_SDDP_PREV"
+}
+
+set_cfg_sddp_prev() {
+  cfg_read_all
+  CFG_SDDP_PREV="$1"
+  write_config "$CFG_FPS" "$CFG_PERSIST" "$CFG_NTFY_ENABLED" "$CFG_NTFY_URL" "$CFG_SDDP_PREV"
 }
 
 # ----------------------------------------------------------------- ntfy i/o
@@ -558,30 +582,44 @@ all_binds_live() {
   is_mounted "$STOCK_ASSETS"
 }
 
+REPORTS_DIR=/tmp/var/log/reports/librdx
+
 snapshot_reports() {
-  # Names of crash reports present now, so the ones a compositor restart of
-  # ours creates can be told apart from anything that was already there.
-  ls -1 /tmp/var/log/reports/librdx 2>/dev/null | sort
+  # Paths of crash reports present now, one per line, so the ones a compositor
+  # restart of ours creates can be told apart from anything already there.
+  # Pathname expansion, never `ls`: see disarm_restart_crashes.
+  for f in "$REPORTS_DIR"/*; do
+    [ -e "$f" ] && printf '%s\n' "$f"
+  done
 }
 
 disarm_restart_crashes() {
   # $1 = snapshot_reports output taken before the restart.
   #
-  # A compositor restart makes LG's igallery preview and one LunaExecutable
-  # segfault on teardown (reproducible on stock firmware; see the constants
-  # block). faultmanager treats any report in this directory as a crash fault
-  # with recovery "rebootToSuspend", and tvpowerd then reboots the set on
-  # the next power-off instead of going straight to standby. The reports are
-  # tmpfs and gone at the next boot anyway; removing only the ones this
-  # restart produced gives the power path back without hiding anything that
-  # was already recorded.
+  # A compositor restart makes LG's inputcommon segfault on teardown
+  # (QFontDatabase::removeAllApplicationFonts; reproducible on stock firmware,
+  # see the constants block). faultmanager scans this directory at power-off,
+  # and any report there makes it answer the suspend request with
+  # rebootToSuspend: the set then reboots instead of settling into active
+  # standby, and the next power-on is a full boot rather than an instant one.
+  # The reports are tmpfs and gone at the next boot anyway; removing only the
+  # ones this restart produced gives the power path back without hiding
+  # anything that was already there.
+  #
+  # The names cannot go through `ls`, and not only because they contain
+  # spaces: rdxd writes the crashing binary's path into the name with 0x02 in
+  # place of each '/', and busybox ls prints those bytes as '?'. A name read
+  # back from ls therefore never matches the file, -e is false, rm is a no-op,
+  # and the report stays. Pathname expansion hands back the raw bytes.
   before="$1"
   n=0
-  for f in $(ls -1 /tmp/var/log/reports/librdx 2>/dev/null | sort); do
+  for f in "$REPORTS_DIR"/*; do
+    [ -e "$f" ] || continue
     printf '%s\n' "$before" | grep -qxF -- "$f" && continue
-    rm -f "/tmp/var/log/reports/librdx/$f" 2>/dev/null && n=$((n+1))
+    rm -f "$f" 2>/dev/null && n=$((n+1))
   done
-  log_line "disarmed $n crash report(s) produced by our compositor restart"
+  [ "$n" -gt 0 ] && log_line "disarmed $n crash report(s) produced by our compositor restart"
+  return 0
 }
 
 # ------------------------------------------------------------------- revert
@@ -632,8 +670,7 @@ do_revert_internal() {
 
   if [ "$REVERT_CHANGED" -eq 1 ]; then
     restart_surface >/dev/null 2>&1
-    kill_home_app
-    relaunch_home
+    home_back_after_restart
   fi
   return 0
 }
@@ -824,8 +861,7 @@ verb_apply() {
       return 1
     fi
     log_line "apply: compositor restarted to read shadow module"
-    kill_home_app
-    relaunch_home
+    home_back_after_restart
     if sed -n "$((marker+1)),\$p" "$MSGLOG" 2>/dev/null | grep -qa 'shader compilation failed'; then
       log_line "apply: shader compilation failure detected post-restart, auto-reverting"
       rm -f "$VERIFIED"
@@ -917,16 +953,14 @@ verb_boot_bind() {
       if compositor_has_shadow && panel_is_active; then
         log_line "boot-bind: compositor had loaded the damaged module, restarting it"
         restart_surface >/dev/null 2>&1
-        kill_home_app
-        relaunch_home
+        home_back_after_restart
       fi
     else
       log_line "boot-bind: shadow rebuild failed, dropping env file"
       remove_env
       if compositor_has_shadow && panel_is_active; then
         restart_surface >/dev/null 2>&1
-        kill_home_app
-        relaunch_home
+        home_back_after_restart
       fi
       ntfy_notify "LumaGlass disabled itself: compositor module unusable"
       printf '{"ok":true,"bound":false,"reason":"stale-module"}\n'
@@ -976,8 +1010,9 @@ verb_status() {
   ntfy_url_esc=$(json_escape "$(cfg_get_str url)")
   firmware_esc=$(json_escape "$(get_firmware)")
   model_esc=$(json_escape "$(get_model)")
-  printf '{"ok":true,"version":"%s","applied":%s,"live":%s,"mounts":%s,"persist":%s,"early":%s,"fps":%s,"ntfy":{"enabled":%s,"url":"%s"},"firmware":"%s","model":"%s"}\n' \
-    "$version" "$applied" "$live" "$mounts" "$persist" "$early" "$fps" "$ntfy_en" "$ntfy_url_esc" "$firmware_esc" "$model_esc"
+  standby=$(standby_mode)
+  printf '{"ok":true,"version":"%s","applied":%s,"live":%s,"mounts":%s,"persist":%s,"early":%s,"standby":"%s","fps":%s,"ntfy":{"enabled":%s,"url":"%s"},"firmware":"%s","model":"%s"}\n' \
+    "$version" "$applied" "$live" "$mounts" "$persist" "$early" "$standby" "$fps" "$ntfy_en" "$ntfy_url_esc" "$firmware_esc" "$model_esc"
   return 0
 }
 
@@ -1090,6 +1125,79 @@ verb_fps() {
   return 0
 }
 
+# ------------------------------------------------------------------ standby
+
+SETTINGS_GET_URI="luna://com.webos.settingsservice/getSystemSettings"
+SETTINGS_SET_URI="luna://com.webos.settingsservice/setSystemSettings"
+
+get_option_setting() {
+  # $1 = key in the "option" category. Prints the value, or nothing.
+  luna-send -n 1 "$SETTINGS_GET_URI" "{\"category\":\"option\",\"keys\":[\"$1\"]}" 2>/dev/null \
+    | tr -d '\n' | sed -n "s/.*\"$1\"[ ]*:[ ]*\"\\([^\"]*\\)\".*/\\1/p"
+}
+
+set_option_setting() {
+  # $1 = key, $2 = value. The set's own settings service, so the change is
+  # what the TV's menus would have done and it persists the same way.
+  luna-send -n 1 "$SETTINGS_SET_URI" \
+    "{\"category\":\"option\",\"settings\":{\"$1\":\"$2\"}}" 2>/dev/null \
+    | tr -d '\n' | grep -q '"returnValue"[ ]*:[ ]*true'
+}
+
+standby_mode() {
+  # What the set will do at the next power-off, read from the live settings
+  # rather than from anything stored here. "warm": stays in active standby
+  # with RAM alive and powers on instantly with the mod still up. "cold":
+  # powers fully down and every power-on is a boot. "system": Quick Start+
+  # is on but SDDP is still enabled, so the first wake will crash webos-sddp
+  # and the power-off after that will reboot - the stock state.
+  qs=$(get_option_setting quickStartMode)
+  sddp=$(get_option_setting enableSDDP)
+  if [ "$qs" != "on" ]; then
+    printf 'cold\n'
+  elif [ "$sddp" = "off" ]; then
+    printf 'warm\n'
+  else
+    printf 'system\n'
+  fi
+}
+
+verb_standby() {
+  # Two things decide whether a power-off leaves the set warm: Quick Start+
+  # (LG's own "keep it in RAM" mode) and the absence of a crash report when
+  # faultmanager looks. The report this mod's own restart produces is always
+  # swept; the one webos-sddp leaves on the first wake is not this mod's, so
+  # it is handled by not starting webos-sddp, through the set's own
+  # enableSDDP setting. The previous value is kept so "cold" restores it.
+  action="${1:-}"
+  cfg_read_all
+  case "$action" in
+    warm)
+      if [ -z "$CFG_SDDP_PREV" ]; then
+        prev=$(get_option_setting enableSDDP); [ -n "$prev" ] || prev=on
+        set_cfg_sddp_prev "$prev"
+      fi
+      set_option_setting enableSDDP off || { emit_error "could not turn off enableSDDP"; return 1; }
+      set_option_setting quickStartMode on || { emit_error "could not turn on quickStartMode"; return 1; }
+      ;;
+    cold)
+      set_option_setting quickStartMode off || { emit_error "could not turn off quickStartMode"; return 1; }
+      if [ -n "$CFG_SDDP_PREV" ]; then
+        set_option_setting enableSDDP "$CFG_SDDP_PREV" || { emit_error "could not restore enableSDDP"; return 1; }
+        set_cfg_sddp_prev ""
+      fi
+      ;;
+    *)
+      emit_error "standby requires warm or cold"
+      return 1
+      ;;
+  esac
+  mode=$(standby_mode)
+  log_line "standby: set to $action (now $mode)"
+  printf '{"ok":true,"standby":"%s"}\n' "$mode"
+  return 0
+}
+
 # --------------------------------------------------------------------- ntfy
 
 verb_ntfy() {
@@ -1171,6 +1279,7 @@ case "$VERB" in
   revert) verb_revert; exit $? ;;
   persist) verb_persist "${2:-}"; exit $? ;;
   fps) verb_fps "${2:-}"; exit $? ;;
+  standby) verb_standby "${2:-}"; exit $? ;;
   ntfy) verb_ntfy "${2:-}" "${3:-}"; exit $? ;;
   log) verb_log "${2:-}"; exit $? ;;
   version) verb_version; exit $? ;;
