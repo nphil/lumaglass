@@ -2,6 +2,8 @@
 
 Liquid glass home screen for rooted LG webOS TVs. Reskins the stock LG webOS 10 Home screen with a compositor-level "liquid glass" material design, generated abstract wallpaper, and a decluttered home layout.
 
+EXPERIMENTAL - TRY AT YOUR OWN RISK!
+
 ## Features
 
 - **Liquid glass theme**: Layered glass aesthetic with Rose Pine color palette, applied at the compositor level for seamless integration
