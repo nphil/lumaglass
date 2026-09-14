@@ -1,0 +1,38 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" width="200" height="200">
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#191724"/>
+      <stop offset="100%" stop-color="#1f1d2e"/>
+    </linearGradient>
+    <linearGradient id="paneIris" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#c4a7e7" stop-opacity="0.92"/>
+      <stop offset="100%" stop-color="#c4a7e7" stop-opacity="0.35"/>
+    </linearGradient>
+    <linearGradient id="paneFoam" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#9ccfd8" stop-opacity="0.85"/>
+      <stop offset="100%" stop-color="#9ccfd8" stop-opacity="0.28"/>
+    </linearGradient>
+    <linearGradient id="paneLove" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#eb6f92" stop-opacity="0.8"/>
+      <stop offset="100%" stop-color="#eb6f92" stop-opacity="0.22"/>
+    </linearGradient>
+    <linearGradient id="sheen" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#e0def4" stop-opacity="0.55"/>
+      <stop offset="100%" stop-color="#e0def4" stop-opacity="0"/>
+    </linearGradient>
+  </defs>
+
+  <rect x="0" y="0" width="200" height="200" rx="44" fill="url(#bg)"/>
+  <rect x="4" y="4" width="192" height="192" rx="40" fill="none" stroke="#26233a" stroke-width="2"/>
+
+  <!-- three overlapping glass panes, back to front -->
+  <rect x="38" y="70" width="104" height="104" rx="26" fill="url(#paneLove)" transform="rotate(-14 90 122)"/>
+  <rect x="58" y="46" width="104" height="104" rx="26" fill="url(#paneFoam)" transform="rotate(8 110 98)"/>
+  <rect x="48" y="54" width="112" height="112" rx="28" fill="url(#paneIris)" transform="rotate(-4 104 110)"/>
+
+  <!-- sheen highlight across the top pane -->
+  <path d="M56 66 L118 58 L100 78 L54 84 Z" fill="url(#sheen)"/>
+
+  <!-- top pane edge -->
+  <rect x="48" y="54" width="112" height="112" rx="28" fill="none" stroke="#e0def4" stroke-opacity="0.45" stroke-width="2" transform="rotate(-4 104 110)"/>
+</svg>

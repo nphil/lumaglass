@@ -1,0 +1,649 @@
+#!/bin/sh
+# LumaGlass on-device engine (POSIX sh / busybox ash only).
+#
+# Verb map (each verb prints exactly one JSON object on stdout, exit 0/nonzero):
+#   status                 -> current measured state
+#   apply                  -> build+bind the mod, restart compositor, relaunch Home
+#   revert                 -> unbind everything, restore icon backups, back to stock
+#   persist on|off         -> toggle the boot-hook symlink in webosbrew init.d
+#   fps on|off             -> toggle the compositor FPS debug overlay
+#   ntfy set <url>|off|test -> configure/test ntfy.sh notifications
+#   log [n]                -> last n log lines (default 20)
+#   version                -> version string from appinfo.json
+#
+# Nothing is ever written outside $APPDIR, $STATE (/var/lib/lumaglass), and
+# /var/lib/webosbrew/init.d/50-lumaglass.
+
+set -u
+
+APPDIR=$(cd "$(dirname "$0")/.." && pwd)
+STATE=/var/lib/lumaglass
+CONFIG="$STATE/config.json"
+LOGFILE="$STATE/log"
+ASSETS="$STATE/assets"
+BACKUP="$STATE/backup"
+STAMP="$STATE/.built-stamp"
+COMPOSITOR_STAGE="$STATE/compositor.qml"
+WALLPAPER_STAGE="$STATE/wall_1080.png"
+
+APPINFO="$APPDIR/appinfo.json"
+QML_SRC="$APPDIR/payload/compositor/StarfishFullscreenContainer.qml"
+HOME_XML_SRC="$APPDIR/payload/home/home.xml"
+EN_SED_SRC="$APPDIR/payload/home/en.json.sed"
+WALL_SRC="$APPDIR/payload/wallpaper/wall_1080.png"
+BG_HD_SRC="$APPDIR/payload/wallpaper/bg_hd.png"
+BG_2K_SRC="$APPDIR/payload/wallpaper/bg_2k.png"
+BG_4K_SRC="$APPDIR/payload/wallpaper/bg_4k.png"
+
+QML_TARGET_1=/usr/lib/qml/WebOSCompositor/views/fullscreen/StarfishFullscreenContainer.qml
+QML_TARGET_2=/usr/lib/qt5/qml/WebOSCompositor/views/fullscreen/StarfishFullscreenContainer.qml
+STOCK_ASSETS=/usr/palm/applications/com.webos.app.home/data/flutter_assets/assets
+
+HOME_PKILL_PATTERN="flutter-client -i com.webos.app.home"
+HOME_LAUNCH_URI="luna://com.webos.applicationManager/launch"
+HOME_LAUNCH_PARAMS='{"id":"com.webos.app.home"}'
+SURFACE_SVC=surface-manager-daemon.service
+MSGLOG=/var/log/messages
+# Seconds to wait after the compositor reports active before launching Home.
+# Measured: 14s is reliable on webOS 10.2.1; shorter leaves a black screen.
+SURFACE_SETTLE=14
+SCREEN_ON_URI="luna://com.webos.service.tvpower/power/turnOnScreen"
+AUTOSTART_LINK=/var/lib/webosbrew/init.d/50-lumaglass
+AUTOSTART_SRC="$APPDIR/tools/autostart.sh"
+
+VERB="${1:-}"
+
+# ---------------------------------------------------------------- utilities
+
+json_escape() {
+  printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g' | tr '\n\r\t' '   '
+}
+
+emit_error() {
+  msg=$(json_escape "$1")
+  printf '{"ok":false,"error":"%s"}\n' "$msg"
+}
+
+mtime_epoch() {
+  date -r "$1" +%s 2>/dev/null || echo 0
+}
+
+log_line() {
+  mkdir -p "$STATE" 2>/dev/null
+  ts=$(date '+%Y-%m-%d %H:%M:%S' 2>/dev/null)
+  msg=$(printf '%s' "$1" | tr '\n' ' ')
+  printf '%s %s\n' "$ts" "$msg" >> "$LOGFILE" 2>/dev/null
+  if [ -f "$LOGFILE" ]; then
+    lc=$(wc -l < "$LOGFILE" 2>/dev/null | tr -d ' ')
+    [ -n "$lc" ] || lc=0
+    if [ "$lc" -gt 200 ] 2>/dev/null; then
+      tail -n 200 "$LOGFILE" > "$LOGFILE.trim.$$" 2>/dev/null && mv "$LOGFILE.trim.$$" "$LOGFILE"
+    fi
+  fi
+}
+
+# ------------------------------------------------------------- mount helpers
+
+is_mounted() {
+  # $1 = exact absolute target path. Matches only the literal bind target,
+  # never the dozens of per-app jail mirrors webOS maintains at paths like
+  # /mnt/lg/*/var/palm/jail/<app>/usr/lib/qml/... which also contain the
+  # same suffix and would otherwise inflate the count.
+  mount 2>/dev/null | grep -qF -- " on $1 type "
+}
+
+count_mounts() {
+  n=0
+  is_mounted "$QML_TARGET_1" && n=$((n+1))
+  is_mounted "$QML_TARGET_2" && n=$((n+1))
+  is_mounted "$STOCK_ASSETS" && n=$((n+1))
+  echo "$n"
+}
+
+drain_umount() {
+  while umount "$1" >/dev/null 2>&1; do :; done
+}
+
+# ------------------------------------------------------------- luna helpers
+
+kill_home_app() {
+  # Safe by construction: this exact pattern is the Home flutter client's own
+  # process command line, never a substring of this script's own invocation.
+  pkill -f "$HOME_PKILL_PATTERN" >/dev/null 2>&1
+  return 0
+}
+
+home_running() {
+  # Home runs in its own namespace, where busybox `ps` cannot see it: `ps`
+  # reports zero flutter-client processes while the app is demonstrably
+  # running and on screen. Scan /proc/*/cmdline instead, and anchor on the
+  # binary path so this never matches a shell that merely mentions the app id
+  # on its own command line.
+  for p in /proc/[0-9]*; do
+    c=$(tr '\0' ' ' < "$p/cmdline" 2>/dev/null)
+    case "$c" in
+      /usr/bin/flutter-client*com.webos.app.home*) return 0 ;;
+    esac
+  done
+  return 1
+}
+
+relaunch_home() {
+  # Sequence and pacing both matter, and both were established empirically:
+  #
+  #   turnOnScreen, then ONE launch, then let it settle.
+  #
+  # Hammering launch requests every couple of seconds while the compositor is
+  # still coming up leaves the panel black indefinitely, even though the Home
+  # process exists, the log has already printed NL_HOME_SHOWN, and
+  # getForegroundAppInfo already reports com.webos.app.home. All three of
+  # those signals go true well before anything is actually composited, so none
+  # of them can be used as the readiness gate - only patience works. The
+  # caller is responsible for the post-restart settle before calling this.
+  i=0
+  while [ "$i" -lt 3 ]; do
+    luna-send -n 1 "$SCREEN_ON_URI" '{}' >/dev/null 2>&1
+    luna-send -n 1 "$HOME_LAUNCH_URI" "$HOME_LAUNCH_PARAMS" >/dev/null 2>&1
+    sleep 8
+    if home_running; then
+      log_line "home up after $i relaunch attempt(s)"
+      return 0
+    fi
+    i=$((i+1))
+  done
+  log_line "home did not come back after 3 launch attempts"
+  return 1
+}
+
+wait_surface_active() {
+  # Bounded poll (~40s) for surface-manager-daemon.service to report active.
+  i=0
+  while [ "$i" -lt 40 ]; do
+    st=$(systemctl is-active "$SURFACE_SVC" 2>/dev/null)
+    if [ "$st" = "active" ]; then return 0; fi
+    sleep 1
+    i=$((i+1))
+  done
+  return 1
+}
+
+restart_surface() {
+  systemctl restart "$SURFACE_SVC" >/dev/null 2>&1
+  wait_surface_active || return 1
+  # is-active goes true almost immediately (Type=notify), long before the
+  # compositor can present a frame. Without this settle the subsequent Home
+  # launch is accepted and then never composited, leaving a black screen.
+  sleep "$SURFACE_SETTLE"
+  return 0
+}
+
+# --------------------------------------------------------------- config i/o
+
+write_config() {
+  # $1=fps $2=persist $3=ntfy_enabled $4=ntfy_url  (fps/persist/enabled: true|false)
+  mkdir -p "$STATE" 2>/dev/null
+  url_esc=$(json_escape "$4")
+  tmp="$CONFIG.tmp.$$"
+  printf '{"fps":%s,"ntfy":{"url":"%s","enabled":%s},"persist":%s}\n' "$1" "$url_esc" "$3" "$2" > "$tmp" && mv "$tmp" "$CONFIG"
+}
+
+ensure_config() {
+  [ -f "$CONFIG" ] || write_config false false false ""
+}
+
+cfg_get_bool() {
+  # $1 = key name (fps|persist|enabled)
+  sed -n "s/.*\"$1\"[ ]*:[ ]*\\(true\\|false\\).*/\\1/p" "$CONFIG" 2>/dev/null | head -n1
+}
+
+cfg_get_str() {
+  # $1 = key name (url)
+  sed -n "s/.*\"$1\"[ ]*:[ ]*\"\\([^\"]*\\)\".*/\\1/p" "$CONFIG" 2>/dev/null | head -n1
+}
+
+cfg_read_all() {
+  ensure_config
+  CFG_FPS=$(cfg_get_bool fps); [ -n "$CFG_FPS" ] || CFG_FPS=false
+  CFG_PERSIST=$(cfg_get_bool persist); [ -n "$CFG_PERSIST" ] || CFG_PERSIST=false
+  CFG_NTFY_ENABLED=$(cfg_get_bool enabled); [ -n "$CFG_NTFY_ENABLED" ] || CFG_NTFY_ENABLED=false
+  CFG_NTFY_URL=$(cfg_get_str url)
+}
+
+set_cfg_bool() {
+  # $1 = fps|persist|enabled  $2 = true|false
+  cfg_read_all
+  case "$1" in
+    fps) CFG_FPS="$2" ;;
+    persist) CFG_PERSIST="$2" ;;
+    enabled) CFG_NTFY_ENABLED="$2" ;;
+  esac
+  write_config "$CFG_FPS" "$CFG_PERSIST" "$CFG_NTFY_ENABLED" "$CFG_NTFY_URL"
+}
+
+set_cfg_ntfy_url() {
+  cfg_read_all
+  CFG_NTFY_URL="$1"
+  write_config "$CFG_FPS" "$CFG_PERSIST" "$CFG_NTFY_ENABLED" "$CFG_NTFY_URL"
+}
+
+# ----------------------------------------------------------------- ntfy i/o
+
+ntfy_notify() {
+  # $1 = message. Always non-fatal: never propagates a failure to the caller.
+  msg="$1"
+  cfg_read_all
+  [ "$CFG_NTFY_ENABLED" = "true" ] || return 0
+  [ -n "$CFG_NTFY_URL" ] || return 0
+  curl -fsS -m 10 -H 'Title: LumaGlass' -H 'Tags: tv' -d "$msg" "$CFG_NTFY_URL" >/dev/null 2>&1
+  return 0
+}
+
+# ---------------------------------------------------------- system readouts
+
+get_version() {
+  sed -n 's/.*"version"[ ]*:[ ]*"\([^"]*\)".*/\1/p' "$APPINFO" 2>/dev/null | head -n1
+}
+
+get_firmware() {
+  if [ -r /etc/os-release ]; then
+    v=$(sed -n 's/^VERSION_ID=\(.*\)$/\1/p' /etc/os-release 2>/dev/null | head -n1 | tr -d '"')
+    if [ -n "$v" ]; then printf '%s' "$v"; return 0; fi
+  fi
+  if [ -r /etc/starfish-release ]; then
+    v=$(sed -n 's/^[A-Za-z]* release \([0-9.]*\).*/\1/p' /etc/starfish-release 2>/dev/null | head -n1)
+    if [ -n "$v" ]; then printf '%s' "$v"; return 0; fi
+  fi
+  printf '%s' ""
+}
+
+get_model() {
+  if [ -r /etc/prefs/properties/machineName ]; then
+    tr -d '\n' < /etc/prefs/properties/machineName 2>/dev/null
+    return 0
+  fi
+  printf '%s' ""
+}
+
+# ------------------------------------------------------------- QML staging
+
+stage_compositor() {
+  # $1 = fps (true|false). Always rebuilt from the pristine payload, so the
+  # payload itself is never touched and repeated calls are idempotent.
+  fps="$1"
+  mkdir -p "$STATE" 2>/dev/null
+  sed -e "s#file:///tmp/hx/wall_1080\\.png#file://$WALLPAPER_STAGE#" \
+      -e "s/property bool debugFps: true/property bool debugFps: $fps/" \
+      "$QML_SRC" > "$COMPOSITOR_STAGE.tmp.$$" && mv "$COMPOSITOR_STAGE.tmp.$$" "$COMPOSITOR_STAGE"
+}
+
+# ------------------------------------------------------------------- revert
+
+do_revert_internal() {
+  # Mechanics only; never prints. Sets REVERT_CHANGED=1 if anything was
+  # actually mounted or restored, so callers can decide whether a disruptive
+  # compositor restart / Home relaunch is warranted.
+  REVERT_CHANGED=0
+
+  for p in "$QML_TARGET_1" "$QML_TARGET_2" "$STOCK_ASSETS"; do
+    if is_mounted "$p"; then REVERT_CHANGED=1; fi
+    drain_umount "$p"
+  done
+
+  # Restore any icon appinfo.json backups generically: each backup's
+  # destination path is recorded in a sidecar .origpath file so revert never
+  # has to guess an app-id-to-path convention.
+  if [ -d "$BACKUP" ]; then
+    for origfile in "$BACKUP"/*.origpath; do
+      [ -e "$origfile" ] || continue
+      base=${origfile%.origpath}
+      content="$base.appinfo.json"
+      [ -f "$content" ] || continue
+      destpath=$(cat "$origfile" 2>/dev/null)
+      if [ -n "$destpath" ]; then
+        if cp -f "$content" "$destpath" 2>/dev/null; then
+          rm -f "$content" "$origfile"
+          REVERT_CHANGED=1
+        fi
+      fi
+    done
+  fi
+
+  if [ "$REVERT_CHANGED" -eq 1 ]; then
+    restart_surface >/dev/null 2>&1
+    kill_home_app
+    relaunch_home
+  fi
+  return 0
+}
+
+verb_revert() {
+  do_revert_internal
+  mounts=$(count_mounts)
+  log_line "revert: changed=$REVERT_CHANGED mounts=$mounts"
+  ntfy_notify "LumaGlass reverted to stock"
+  printf '{"ok":true,"applied":false,"mounts":%s}\n' "$mounts"
+  return 0
+}
+
+# -------------------------------------------------------------------- apply
+
+verb_apply() {
+  t0=$(date +%s)
+  mkdir -p "$STATE" "$BACKUP" 2>/dev/null
+
+  version=$(get_version); [ -n "$version" ] || version="0.0.0"
+
+  # 1. Build/refresh $ASSETS from real stock, never from a merged view.
+  need_build=0
+  if [ ! -d "$ASSETS" ] || [ ! -d "$ASSETS/i18n" ]; then
+    need_build=1
+  else
+    stamp_epoch=$(mtime_epoch "$STAMP")
+    for src in "$HOME_XML_SRC" "$EN_SED_SRC" "$BG_HD_SRC" "$BG_2K_SRC" "$BG_4K_SRC"; do
+      s_epoch=$(mtime_epoch "$src")
+      if [ "$s_epoch" -gt "$stamp_epoch" ] 2>/dev/null; then need_build=1; fi
+    done
+  fi
+
+  if [ "$need_build" -eq 1 ]; then
+    # Unmount first: if a bind is already active, reading the target now
+    # would copy a merged view, never real stock.
+    drain_umount "$STOCK_ASSETS"
+    rm -rf "$ASSETS.building" 2>/dev/null
+    mkdir -p "$ASSETS.building"
+    cperr=$( (cd "$STOCK_ASSETS" && cp -R . "$ASSETS.building") 2>&1 >/dev/null )
+    cprc=$?
+    if [ "$cprc" -ne 0 ]; then
+      log_line "apply: failed to copy stock assets: $cperr"
+      ntfy_notify "LumaGlass apply failed: could not copy stock assets"
+      emit_error "stock asset copy failed: $cperr"
+      return 1
+    fi
+    # i18n is a symlink in real stock; dereference it into a real directory
+    # so string overlays land inside the copy, not on the original target.
+    if [ -L "$ASSETS.building/i18n" ]; then
+      i18n_target=$(readlink "$ASSETS.building/i18n" 2>/dev/null)
+      case "$i18n_target" in
+        /*) : ;;
+        *) i18n_target="$STOCK_ASSETS/$i18n_target" ;;
+      esac
+      if [ -n "$i18n_target" ] && [ -d "$i18n_target" ]; then
+        rm -f "$ASSETS.building/i18n"
+        mkdir -p "$ASSETS.building/i18n"
+        ( cd "$i18n_target" && cp -R . "$ASSETS.building/i18n" ) 2>/dev/null
+      fi
+    fi
+    # Keep a pristine copy of the stock strings. Every apply regenerates
+    # en.json from this, so the greeting cannot freeze at a stale value the
+    # way an in-place rewrite would (the sed rules match stock text only).
+    if [ -f "$ASSETS.building/i18n/en.json" ]; then
+      cp -f "$ASSETS.building/i18n/en.json" "$ASSETS.building/i18n/en.json.stock" 2>/dev/null
+    fi
+    rm -rf "$ASSETS" 2>/dev/null
+    mv "$ASSETS.building" "$ASSETS"
+    touch "$STAMP" 2>/dev/null
+  fi
+
+  # 2. Overlay payload onto $ASSETS.
+  cp -f "$HOME_XML_SRC" "$ASSETS/home.xml" 2>/dev/null
+
+  mkdir -p "$ASSETS/images/hd" "$ASSETS/images/2k" "$ASSETS/images/4k" 2>/dev/null
+  cp -f "$BG_HD_SRC" "$ASSETS/images/hd/bg_banner_img.png" 2>/dev/null
+  cp -f "$BG_2K_SRC" "$ASSETS/images/2k/bg_banner_img.png" 2>/dev/null
+  cp -f "$BG_4K_SRC" "$ASSETS/images/4k/bg_banner_img.png" 2>/dev/null
+
+  # Keep a pristine stock copy and always regenerate from it: rewriting
+  # en.json in place would stop matching the stock keys on the second apply.
+  # The greeting is owned by the compositor QML, not by these strings.
+  if [ ! -f "$ASSETS/i18n/en.json.stock" ] && [ -f "$ASSETS/i18n/en.json" ]; then
+    cp -f "$ASSETS/i18n/en.json" "$ASSETS/i18n/en.json.stock" 2>/dev/null
+  fi
+  if [ -f "$ASSETS/i18n/en.json.stock" ]; then
+    sed -f "$EN_SED_SRC" "$ASSETS/i18n/en.json.stock" 2>/dev/null > "$ASSETS/i18n/en.json.tmp.$$" \
+      && mv "$ASSETS/i18n/en.json.tmp.$$" "$ASSETS/i18n/en.json"
+  fi
+
+  # 3. Drain any existing binds BEFORE staging. The staged QML is the source
+  # of a live bind after a previous apply, and replacing a bind source in
+  # place fails with EBUSY, so unmounting has to come first.
+  drain_umount "$QML_TARGET_1"
+  drain_umount "$QML_TARGET_2"
+  drain_umount "$STOCK_ASSETS"
+
+  # 4. Stage the persistent wallpaper copy and the compositor QML working copy.
+  cp -f "$WALL_SRC" "$WALLPAPER_STAGE" 2>/dev/null
+  fps_now=$(cfg_get_bool fps); [ -n "$fps_now" ] || fps_now=false
+  stage_compositor "$fps_now"
+
+  # 5. Bind. On this firmware /usr/lib/qt5/qml/WebOSCompositor is a symlink to
+  # /usr/lib/qml/WebOSCompositor, so both QML paths are the same inode and a
+  # second bind would just stack a redundant mount on the same mountpoint.
+  # Resolve and deduplicate, then bind each distinct target exactly once.
+  qml1=$(readlink -f "$QML_TARGET_1" 2>/dev/null); [ -n "$qml1" ] || qml1="$QML_TARGET_1"
+  qml2=$(readlink -f "$QML_TARGET_2" 2>/dev/null); [ -n "$qml2" ] || qml2="$QML_TARGET_2"
+  qml_targets="$qml1"
+  [ "$qml2" = "$qml1" ] || qml_targets="$qml1 $qml2"
+
+  for t in $qml_targets; do
+    binderr=$(mount --bind "$COMPOSITOR_STAGE" "$t" 2>&1 >/dev/null)
+    if [ $? -ne 0 ]; then
+      log_line "apply: bind failed on $t: $binderr"
+      do_revert_internal
+      ntfy_notify "LumaGlass apply failed: compositor bind failed"
+      emit_error "compositor bind failed: $binderr"
+      return 1
+    fi
+  done
+
+  binderr=$(mount --bind "$ASSETS" "$STOCK_ASSETS" 2>&1 >/dev/null)
+  if [ $? -ne 0 ]; then
+    log_line "apply: bind failed on assets: $binderr"
+    do_revert_internal
+    ntfy_notify "LumaGlass apply failed: assets bind failed"
+    emit_error "assets bind failed: $binderr"
+    return 1
+  fi
+
+  # Every intended bind must be live before we touch the compositor.
+  for t in $qml_targets "$STOCK_ASSETS"; do
+    if ! is_mounted "$t"; then
+      log_line "apply: bind verification failed for $t"
+      do_revert_internal
+      ntfy_notify "LumaGlass apply failed: bind verification failed"
+      emit_error "bind verification failed for $t"
+      return 1
+    fi
+  done
+
+  # 6. Restart compositor, bounded wait, then relaunch Home.
+  start_marker=$(wc -l < "$MSGLOG" 2>/dev/null | tr -d ' '); [ -n "$start_marker" ] || start_marker=0
+
+  if ! restart_surface; then
+    log_line "apply: surface-manager-daemon did not come back active"
+    do_revert_internal
+    ntfy_notify "LumaGlass apply failed: compositor did not restart"
+    emit_error "compositor did not become active after restart"
+    return 1
+  fi
+
+  kill_home_app
+  relaunch_home
+
+  # 7. Verify: no shader compile failures logged since the marker; auto-revert if so.
+  shader_fail=0
+  if [ -r "$MSGLOG" ]; then
+    if sed -n "$((start_marker+1)),\$p" "$MSGLOG" 2>/dev/null | grep -qa 'shader compilation failed'; then
+      shader_fail=1
+    fi
+  fi
+
+  if [ "$shader_fail" -eq 1 ]; then
+    log_line "apply: shader compilation failure detected post-restart, auto-reverting"
+    do_revert_internal
+    ntfy_notify "LumaGlass apply failed: shader compilation error, auto-reverted to stock"
+    emit_error "shader compilation failed; auto-reverted to stock"
+    return 1
+  fi
+
+  mounts=$(count_mounts)
+  took=$(( $(date +%s) - t0 ))
+  log_line "apply: success version=$version mounts=$mounts took=${took}s"
+  ntfy_notify "LumaGlass applied (v$version)"
+  printf '{"ok":true,"applied":true,"mounts":%s,"took":%s}\n' "$mounts" "$took"
+  return 0
+}
+
+# ------------------------------------------------------------------- status
+
+verb_status() {
+  ensure_config
+  version=$(get_version); [ -n "$version" ] || version="0.0.0"
+  mounts=$(count_mounts)
+  if [ "$mounts" -gt 0 ]; then applied=true; else applied=false; fi
+  if [ -L "$AUTOSTART_LINK" ]; then persist=true; else persist=false; fi
+  fps=$(cfg_get_bool fps); [ "$fps" = "true" ] && fps=true || fps=false
+  ntfy_en=$(cfg_get_bool enabled); [ "$ntfy_en" = "true" ] && ntfy_en=true || ntfy_en=false
+  ntfy_url_esc=$(json_escape "$(cfg_get_str url)")
+  firmware_esc=$(json_escape "$(get_firmware)")
+  model_esc=$(json_escape "$(get_model)")
+  printf '{"ok":true,"version":"%s","applied":%s,"mounts":%s,"persist":%s,"fps":%s,"ntfy":{"enabled":%s,"url":"%s"},"firmware":"%s","model":"%s"}\n' \
+    "$version" "$applied" "$mounts" "$persist" "$fps" "$ntfy_en" "$ntfy_url_esc" "$firmware_esc" "$model_esc"
+  return 0
+}
+
+# ------------------------------------------------------------------ persist
+
+verb_persist() {
+  action="${1:-}"
+  case "$action" in
+    on)
+      mkdir -p "$(dirname "$AUTOSTART_LINK")" 2>/dev/null
+      rm -f "$AUTOSTART_LINK" 2>/dev/null
+      if ! ln -s "$AUTOSTART_SRC" "$AUTOSTART_LINK" 2>/dev/null; then
+        emit_error "failed to create persist symlink"
+        return 1
+      fi
+      set_cfg_bool persist true
+      ;;
+    off)
+      rm -f "$AUTOSTART_LINK" 2>/dev/null
+      set_cfg_bool persist false
+      ;;
+    *)
+      emit_error "persist requires on or off"
+      return 1
+      ;;
+  esac
+  if [ -L "$AUTOSTART_LINK" ]; then real=true; else real=false; fi
+  log_line "persist: set to $action (symlink=$real)"
+  printf '{"ok":true,"persist":%s}\n' "$real"
+  return 0
+}
+
+# ---------------------------------------------------------------------- fps
+
+verb_fps() {
+  action="${1:-}"
+  case "$action" in
+    on) val=true ;;
+    off) val=false ;;
+    *) emit_error "fps requires on or off"; return 1 ;;
+  esac
+  set_cfg_bool fps "$val"
+  if [ "$(count_mounts)" -gt 0 ]; then
+    stage_compositor "$val"
+    drain_umount "$QML_TARGET_1"
+    drain_umount "$QML_TARGET_2"
+    mount --bind "$COMPOSITOR_STAGE" "$QML_TARGET_1" 2>/dev/null
+    mount --bind "$COMPOSITOR_STAGE" "$QML_TARGET_2" 2>/dev/null
+    restart_surface >/dev/null 2>&1
+  fi
+  log_line "fps: set to $val"
+  printf '{"ok":true,"fps":%s}\n' "$val"
+  return 0
+}
+
+# --------------------------------------------------------------------- ntfy
+
+verb_ntfy() {
+  action="${1:-}"
+  case "$action" in
+    set)
+      url="${2:-}"
+      case "$url" in
+        http://*/*|https://*/*) : ;;
+        *) emit_error "ntfy url must be http(s) with a topic path"; return 1 ;;
+      esac
+      set_cfg_ntfy_url "$url"
+      set_cfg_bool enabled true
+      log_line "ntfy: configured"
+      ;;
+    off)
+      set_cfg_bool enabled false
+      log_line "ntfy: disabled"
+      ;;
+    test)
+      cfg_read_all
+      if [ "$CFG_NTFY_ENABLED" != "true" ] || [ -z "$CFG_NTFY_URL" ]; then
+        emit_error "ntfy is not configured"
+        return 1
+      fi
+      if ! curl -fsS -m 10 -H 'Title: LumaGlass' -H 'Tags: tv' -d 'LumaGlass test notification' "$CFG_NTFY_URL" >/dev/null 2>&1; then
+        log_line "ntfy: test delivery failed"
+        emit_error "ntfy test failed to deliver"
+        return 1
+      fi
+      log_line "ntfy: test delivered"
+      ;;
+    *)
+      emit_error "ntfy requires set <url>, off, or test"
+      return 1
+      ;;
+  esac
+  cfg_read_all
+  url_esc=$(json_escape "$CFG_NTFY_URL")
+  printf '{"ok":true,"ntfy":{"enabled":%s,"url":"%s"}}\n' "$CFG_NTFY_ENABLED" "$url_esc"
+  return 0
+}
+
+# ---------------------------------------------------------------------- log
+
+verb_log() {
+  n="${1:-}"
+  case "$n" in ''|*[!0-9]*) n=20 ;; esac
+  mkdir -p "$STATE" 2>/dev/null
+  touch "$LOGFILE" 2>/dev/null
+  out=""
+  while IFS= read -r line || [ -n "$line" ]; do
+    esc=$(json_escape "$line")
+    if [ -z "$out" ]; then out="\"$esc\""; else out="$out,\"$esc\""; fi
+  done <<LGEOF
+$(tail -n "$n" "$LOGFILE" 2>/dev/null)
+LGEOF
+  printf '{"ok":true,"lines":[%s]}\n' "$out"
+  return 0
+}
+
+# ------------------------------------------------------------------ version
+
+verb_version() {
+  v=$(get_version); [ -n "$v" ] || v="0.0.0"
+  printf '{"ok":true,"version":"%s"}\n' "$v"
+  return 0
+}
+
+# ------------------------------------------------------------------- dispatch
+
+ensure_config
+
+case "$VERB" in
+  status) verb_status; exit $? ;;
+  apply) verb_apply; exit $? ;;
+  revert) verb_revert; exit $? ;;
+  persist) verb_persist "${2:-}"; exit $? ;;
+  fps) verb_fps "${2:-}"; exit $? ;;
+  ntfy) verb_ntfy "${2:-}" "${3:-}"; exit $? ;;
+  log) verb_log "${2:-}"; exit $? ;;
+  version) verb_version; exit $? ;;
+  *) emit_error "unknown verb: $VERB"; exit 1 ;;
+esac

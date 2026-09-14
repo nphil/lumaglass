@@ -1,0 +1,573 @@
+/**
+ * LumaGlass Settings App
+ * Remote-control frontend for the LumaGlass CLI via Homebrew Channel's exec service
+ */
+
+(function() {
+  'use strict';
+
+  /* ====== Bridge & CLI ====== */
+
+  /**
+   * Check if real webOS bridge is available
+   */
+  function hasRealBridge() {
+    return typeof window.webOS === 'object' &&
+           typeof window.webOS.service === 'object' &&
+           typeof window.webOS.service.request === 'function';
+  }
+
+  /**
+   * exec(cmd) -> Promise<{returnValue, stdoutString, stderrString, error}>
+   * Calls luna://org.webosbrew.hbchannel.service/exec with the given shell command
+   */
+  async function exec(cmd) {
+    if (hasRealBridge()) {
+      return new Promise((resolve, reject) => {
+        window.webOS.service.request('luna://org.webosbrew.hbchannel.service', {
+          method: 'exec',
+          parameters: { command: cmd },
+          onSuccess: resolve,
+          onFailure: (err) => reject(new Error(err?.errorText || 'exec failed'))
+        });
+      });
+    }
+
+    // Fallback: try PalmServiceBridge constructor
+    if (typeof PalmServiceBridge === 'function') {
+      const bridge = new PalmServiceBridge();
+      return new Promise((resolve, reject) => {
+        const callback = (msg) => {
+          try {
+            const parsed = JSON.parse(msg);
+            resolve(parsed);
+          } catch {
+            reject(new Error('exec: invalid response'));
+          }
+        };
+        bridge.onservicecallback = callback;
+        bridge.call('palm://org.webosbrew.hbchannel.service/exec', JSON.stringify({ command: cmd }));
+      });
+    }
+
+    // No real bridge; check if mock mode is enabled
+    const isMockMode = new URLSearchParams(window.location.search).get('mock') === '1';
+    if (isMockMode) {
+      return mockExec(cmd);
+    }
+
+    // No bridge and not in mock mode: error
+    throw new Error('Homebrew Channel root service unavailable');
+  }
+
+  /**
+   * cli(verb, arg?) -> Promise<{ok:boolean, ...payload}>
+   * Constructs and runs: /media/developer/apps/usr/palm/applications/org.nphil.lumaglass/tools/lumaglass <verb> [arg]
+   */
+  async function cli(verb, arg) {
+    let cmd = '/media/developer/apps/usr/palm/applications/org.nphil.lumaglass/tools/lumaglass ' + verb;
+    if (arg) {
+      cmd += ' ' + arg;
+    }
+
+    try {
+      const response = await exec(cmd);
+      if (!response.stdoutString) {
+        throw new Error('CLI returned no output');
+      }
+      const parsed = JSON.parse(response.stdoutString);
+      if (!parsed.ok) {
+        throw new Error(parsed.error || 'Unknown CLI error');
+      }
+      return parsed;
+    } catch (err) {
+      throw new Error(err.message || 'CLI failed');
+    }
+  }
+
+  /* ====== Mock Bridge (browser preview only) ====== */
+
+  const mockState = {
+    applied: false,
+    mounts: 0,
+    persist: false,
+    fps: false,
+    ntfy: { enabled: false, url: '' },
+    version: '0.1.0',
+    firmware: '10.2.1',
+    model: 'HE_DTV_W24G_AFABATAA'
+  };
+
+  const mockLog = [
+    '[00:00] LumaGlass settings app started',
+    '[00:01] Status retrieved successfully',
+    '[mock mode] No real Homebrew Channel available',
+    '[mock mode] Using simulated CLI responses'
+  ];
+
+  async function mockExec(cmd) {
+    // Simulate network delay
+    await new Promise(r => setTimeout(r, 300));
+
+    let stdoutString = '{"ok":true}';
+
+    if (cmd.includes('status')) {
+      stdoutString = JSON.stringify({
+        ok: true,
+        version: mockState.version,
+        applied: mockState.applied,
+        mounts: mockState.mounts,
+        persist: mockState.persist,
+        fps: mockState.fps,
+        ntfy: mockState.ntfy,
+        firmware: mockState.firmware,
+        model: mockState.model
+      });
+    } else if (cmd.includes('apply')) {
+      mockState.applied = true;
+      mockState.mounts = 3;
+      stdoutString = JSON.stringify({
+        ok: true,
+        applied: true,
+        mounts: 3,
+        took: 25
+      });
+    } else if (cmd.includes('revert')) {
+      mockState.applied = false;
+      mockState.mounts = 0;
+      mockState.persist = false;
+      stdoutString = JSON.stringify({
+        ok: true,
+        applied: false,
+        mounts: 0
+      });
+    } else if (cmd.includes('persist on')) {
+      mockState.persist = true;
+      stdoutString = JSON.stringify({ ok: true, persist: true });
+    } else if (cmd.includes('persist off')) {
+      mockState.persist = false;
+      stdoutString = JSON.stringify({ ok: true, persist: false });
+    } else if (cmd.includes('fps on')) {
+      mockState.fps = true;
+      stdoutString = JSON.stringify({ ok: true, fps: true });
+    } else if (cmd.includes('fps off')) {
+      mockState.fps = false;
+      stdoutString = JSON.stringify({ ok: true, fps: false });
+    } else if (cmd.includes('ntfy set')) {
+      const match = cmd.match(/ntfy set (.+)$/);
+      if (match) {
+        mockState.ntfy = { enabled: true, url: match[1] };
+        stdoutString = JSON.stringify({ ok: true, ntfy: mockState.ntfy });
+      } else {
+        stdoutString = JSON.stringify({ ok: false, error: 'ntfy set: invalid URL' });
+      }
+    } else if (cmd.includes('ntfy off')) {
+      mockState.ntfy = { enabled: false, url: '' };
+      stdoutString = JSON.stringify({ ok: true, ntfy: mockState.ntfy });
+    } else if (cmd.includes('ntfy test')) {
+      stdoutString = JSON.stringify({ ok: true, tested: true });
+    } else if (cmd.includes('log')) {
+      stdoutString = JSON.stringify({ ok: true, lines: mockLog });
+    } else if (cmd.includes('version')) {
+      stdoutString = JSON.stringify({ ok: true, version: mockState.version });
+    }
+
+    return { returnValue: true, stdoutString, stderrString: '' };
+  }
+
+  /* ====== UI State & DOM ====== */
+
+  const dom = {
+    app: document.getElementById('app'),
+    header: document.getElementById('header'),
+    rows: document.getElementById('rows'),
+    footer: document.getElementById('footer'),
+    statusCard: document.getElementById('status-card'),
+    statApplied: document.getElementById('stat-applied'),
+    statMounts: document.getElementById('stat-mounts'),
+    statVersion: document.getElementById('stat-version'),
+    statFirmware: document.getElementById('stat-firmware'),
+    statModel: document.getElementById('stat-model'),
+    footerStatus: document.getElementById('footer-status'),
+    toast: document.getElementById('toast'),
+
+    // Overlays
+    confirmRevert: document.getElementById('overlay-confirm-revert'),
+    applyBusy: document.getElementById('overlay-apply-busy'),
+    busy: document.getElementById('overlay-busy'),
+    ntfyEditor: document.getElementById('overlay-ntfy'),
+    logPanel: document.getElementById('overlay-log'),
+
+    // Controls
+    confirmRevertYes: document.getElementById('confirm-revert-yes'),
+    confirmRevertNo: document.getElementById('confirm-revert-no'),
+    ntfyInput: document.getElementById('ntfy-input'),
+    ntfySave: document.getElementById('ntfy-save'),
+    ntfyOff: document.getElementById('ntfy-off'),
+    ntfyCancel: document.getElementById('ntfy-cancel'),
+    logContent: document.getElementById('log-content'),
+    logClose: document.getElementById('log-close'),
+    togglePersist: document.getElementById('toggle-persist'),
+    toggleFps: document.getElementById('toggle-fps'),
+    ntfySub: document.getElementById('ntfy-sub')
+  };
+
+  const state = {
+    currentMode: 'main', // 'main', 'confirmRevert', 'ntfy', 'log'
+    focusIndex: 0,
+    status: null,
+    isExecuting: false
+  };
+
+  const rows = Array.from(document.querySelectorAll('.row.focusable'));
+
+  /* ====== Focus & Keyboard ====== */
+
+  function setFocus(index, mode) {
+    if (mode) state.currentMode = mode;
+
+    let focusable = [];
+    if (state.currentMode === 'main') {
+      focusable = rows;
+    } else if (state.currentMode === 'confirmRevert') {
+      focusable = [dom.confirmRevertYes, dom.confirmRevertNo];
+    } else if (state.currentMode === 'ntfy') {
+      focusable = [dom.ntfyInput, dom.ntfySave, dom.ntfyOff, dom.ntfyCancel];
+    } else if (state.currentMode === 'log') {
+      focusable = [dom.logContent, dom.logClose];
+    }
+
+    if (index < 0) index = 0;
+    if (index >= focusable.length) index = focusable.length - 1;
+
+    state.focusIndex = index;
+    focusable[index]?.focus();
+  }
+
+  function moveFocus(direction) {
+    setFocus(state.focusIndex + direction);
+  }
+
+  document.addEventListener('keydown', (e) => {
+    // Support old webOS browser where keyCode is read-only or unavailable
+    const code = e.keyCode || e.which || (e.key === 'ArrowUp' ? 38 : e.key === 'ArrowDown' ? 40 : e.key === 'Enter' ? 13 : null);
+
+    if (state.currentMode === 'log') {
+      // In log view, Up/Down scroll content, Back exits
+      if (code === 38) { // Up
+        dom.logContent.scrollTop -= 100;
+        e.preventDefault();
+      } else if (code === 40) { // Down
+        dom.logContent.scrollTop += 100;
+        e.preventDefault();
+      } else if (code === 461) { // Back
+        closeLogPanel();
+        e.preventDefault();
+      }
+      return;
+    }
+
+    if (code === 38) { // Arrow Up
+      moveFocus(-1);
+      e.preventDefault();
+    } else if (code === 40) { // Arrow Down
+      moveFocus(1);
+      e.preventDefault();
+    } else if (code === 13) { // Enter
+      const focused = document.activeElement;
+      if (focused && focused.classList.contains('focusable')) {
+        focused.click();
+      }
+      e.preventDefault();
+    } else if (code === 461) { // Back
+      if (state.currentMode !== 'main') {
+        closeAllOverlays();
+        state.currentMode = 'main';
+        setFocus(state.focusIndex);
+      } else if (typeof webOS !== 'undefined' && typeof webOS.platformBack === 'function') {
+        webOS.platformBack();
+      } else {
+        window.close();
+      }
+      e.preventDefault();
+    }
+  });
+
+  /* ====== Status & Rendering ====== */
+
+  async function refreshStatus() {
+    try {
+      state.status = await cli('status');
+      renderStatus();
+    } catch (err) {
+      showError(err.message);
+      state.status = null;
+    }
+  }
+
+  function renderStatus() {
+    if (!state.status) {
+      dom.statApplied.textContent = '?';
+      dom.statMounts.textContent = '?';
+      dom.statVersion.textContent = '?';
+      dom.statFirmware.textContent = '?';
+      dom.statModel.textContent = '?';
+      return;
+    }
+
+    dom.statApplied.textContent = state.status.applied ? 'Yes' : 'No';
+    dom.statMounts.textContent = state.status.mounts;
+    dom.statVersion.textContent = state.status.version;
+    dom.statFirmware.textContent = state.status.firmware;
+    dom.statModel.textContent = state.status.model;
+
+    // Update toggles
+    dom.togglePersist.setAttribute('data-on', state.status.persist ? 'true' : 'false');
+    dom.toggleFps.setAttribute('data-on', state.status.fps ? 'true' : 'false');
+    dom.ntfySub.textContent = state.status.ntfy?.enabled ? state.status.ntfy.url : 'off';
+  }
+
+  function showError(msg) {
+    dom.toast.textContent = msg;
+    dom.toast.removeAttribute('hidden');
+    setTimeout(() => dom.toast.setAttribute('hidden', ''), 4000);
+  }
+
+  /* ====== Overlay Control ====== */
+
+  function closeAllOverlays() {
+    dom.confirmRevert.setAttribute('hidden', '');
+    dom.applyBusy.setAttribute('hidden', '');
+    dom.busy.setAttribute('hidden', '');
+    dom.ntfyEditor.setAttribute('hidden', '');
+    dom.logPanel.setAttribute('hidden', '');
+  }
+
+  /* ====== Row Actions ====== */
+
+  async function onApply() {
+    if (state.isExecuting) return;
+
+    state.currentMode = 'applying';
+    dom.applyBusy.removeAttribute('hidden');
+    state.isExecuting = true;
+
+    try {
+      // Fire the CLI call; it may take 20-40s and might kill this app's surface
+      const result = await cli('apply');
+      // If we get here, the app survived; refresh status
+      await refreshStatus();
+      showError('Applied! The home screen is now LumaGlass.');
+    } catch (err) {
+      showError('Apply failed: ' + err.message);
+    } finally {
+      state.isExecuting = false;
+      closeAllOverlays();
+      state.currentMode = 'main';
+      setFocus(0);
+    }
+  }
+
+  async function onRevert() {
+    if (state.isExecuting) return;
+    closeAllOverlays();
+    state.currentMode = 'confirmRevert';
+    dom.confirmRevert.removeAttribute('hidden');
+    setFocus(0);
+  }
+
+  async function confirmRevert() {
+    if (state.isExecuting) return;
+    state.isExecuting = true;
+    closeAllOverlays();
+    dom.busy.removeAttribute('hidden');
+    document.getElementById('busy-message').textContent = 'Reverting...';
+
+    try {
+      await cli('revert');
+      await refreshStatus();
+      showError('Reverted to stock home screen.');
+    } catch (err) {
+      showError('Revert failed: ' + err.message);
+    } finally {
+      state.isExecuting = false;
+      dom.busy.setAttribute('hidden', '');
+      state.currentMode = 'main';
+      setFocus(0);
+    }
+  }
+
+  async function onPersistToggle() {
+    if (state.isExecuting) return;
+    state.isExecuting = true;
+
+    const newVal = !state.status.persist;
+    try {
+      await cli('persist', newVal ? 'on' : 'off');
+      await refreshStatus();
+    } catch (err) {
+      showError('Persist toggle failed: ' + err.message);
+    } finally {
+      state.isExecuting = false;
+    }
+  }
+
+  async function onFpsToggle() {
+    if (state.isExecuting) return;
+    state.isExecuting = true;
+
+    const newVal = !state.status.fps;
+    try {
+      await cli('fps', newVal ? 'on' : 'off');
+      await refreshStatus();
+    } catch (err) {
+      showError('FPS toggle failed: ' + err.message);
+    } finally {
+      state.isExecuting = false;
+    }
+  }
+
+  function onNtfyOpen() {
+    if (state.isExecuting) return;
+    closeAllOverlays();
+    state.currentMode = 'ntfy';
+    dom.ntfyEditor.removeAttribute('hidden');
+    dom.ntfyInput.value = state.status.ntfy?.enabled ? state.status.ntfy.url : '';
+    setFocus(0, 'ntfy');
+  }
+
+  async function onNtfySave() {
+    const url = dom.ntfyInput.value.trim();
+    if (!url) {
+      showError('Please enter a URL or click "Turn off"');
+      return;
+    }
+
+    if (state.isExecuting) return;
+    state.isExecuting = true;
+
+    try {
+      await cli('ntfy set', url);
+      await refreshStatus();
+      closeAllOverlays();
+      state.currentMode = 'main';
+      setFocus(0);
+    } catch (err) {
+      showError('ntfy set failed: ' + err.message);
+    } finally {
+      state.isExecuting = false;
+    }
+  }
+
+  async function onNtfyOff() {
+    if (state.isExecuting) return;
+    state.isExecuting = true;
+
+    try {
+      await cli('ntfy off');
+      await refreshStatus();
+      closeAllOverlays();
+      state.currentMode = 'main';
+      setFocus(0);
+    } catch (err) {
+      showError('ntfy off failed: ' + err.message);
+    } finally {
+      state.isExecuting = false;
+    }
+  }
+
+  function onNtfyCancel() {
+    closeAllOverlays();
+    state.currentMode = 'main';
+    setFocus(0);
+  }
+
+  async function onNtfyTest() {
+    if (state.isExecuting) return;
+    if (!state.status.ntfy?.enabled) {
+      showError('ntfy is not configured');
+      return;
+    }
+
+    state.isExecuting = true;
+    dom.busy.removeAttribute('hidden');
+    document.getElementById('busy-message').textContent = 'Sending test notification...';
+
+    try {
+      await cli('ntfy test');
+      showError('Test notification sent!');
+    } catch (err) {
+      showError('Test failed: ' + err.message);
+    } finally {
+      state.isExecuting = false;
+      dom.busy.setAttribute('hidden', '');
+    }
+  }
+
+  async function onViewLog() {
+    if (state.isExecuting) return;
+    state.isExecuting = true;
+    closeAllOverlays();
+
+    try {
+      const result = await cli('log 40');
+      dom.logContent.textContent = (result.lines || []).join('\n');
+      state.currentMode = 'log';
+      dom.logPanel.removeAttribute('hidden');
+      setFocus(0, 'log');
+    } catch (err) {
+      showError('Log failed: ' + err.message);
+    } finally {
+      state.isExecuting = false;
+    }
+  }
+
+  function closeLogPanel() {
+    dom.logPanel.setAttribute('hidden', '');
+    state.currentMode = 'main';
+    setFocus(0);
+  }
+
+  /* ====== Event Listeners ====== */
+
+  document.getElementById('row-apply').addEventListener('click', onApply);
+  document.getElementById('row-revert').addEventListener('click', onRevert);
+  document.getElementById('row-persist').addEventListener('click', onPersistToggle);
+  document.getElementById('row-fps').addEventListener('click', onFpsToggle);
+  document.getElementById('row-ntfy').addEventListener('click', onNtfyOpen);
+  document.getElementById('row-ntfy-test').addEventListener('click', onNtfyTest);
+  document.getElementById('row-log').addEventListener('click', onViewLog);
+
+  dom.confirmRevertYes.addEventListener('click', confirmRevert);
+  dom.confirmRevertNo.addEventListener('click', onNtfyCancel);
+
+  dom.ntfySave.addEventListener('click', onNtfySave);
+  dom.ntfyOff.addEventListener('click', onNtfyOff);
+  dom.ntfyCancel.addEventListener('click', onNtfyCancel);
+
+  dom.logClose.addEventListener('click', closeLogPanel);
+
+  // Handle app suspend/resume for resilient apply flow
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') {
+      refreshStatus();
+    }
+  });
+
+  window.addEventListener('focus', refreshStatus);
+
+  /* ====== Initialization ====== */
+
+  document.addEventListener('DOMContentLoaded', async () => {
+    // On startup, refresh status
+    await refreshStatus();
+    // Set initial focus on Apply row
+    setFocus(0);
+  });
+
+  // If DOM is already loaded when script runs
+  if (document.readyState !== 'loading') {
+    refreshStatus().then(() => setFocus(0));
+  }
+
+})();

@@ -1,0 +1,62 @@
+name: Build
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate shell scripts
+        run: |
+          sh -n tools/build-ipk.sh
+          sh -n tools/autostart.sh
+          sh -n tools/lumaglass
+
+      - name: Validate Node.js scripts
+        run: |
+          node --check tools/gen-manifest.js
+
+      - name: Validate JSON files
+        run: |
+          set -e
+          for f in appinfo.json repo.json; do
+            jq empty "$f" && echo "✓ $f" || { echo "✗ $f"; exit 1; }
+          done
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+  build:
+    runs-on: ubuntu-latest
+    needs: validate
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build IPK
+        run: |
+          sh tools/build-ipk.sh
+
+      - name: Verify IPK
+        run: |
+          ar t org.nphil.lumaglass_*.ipk
+          echo "---"
+          tar -tzvf build/verify/data.tar.gz | grep -E 'tools/(lumaglass|autostart)'
+
+      - name: Upload IPK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: lumaglass-ipk
+          path: org.nphil.lumaglass_*.ipk
+          if-no-files-found: error
+
+      - name: Show build summary
+        run: |
+          echo "Build complete:"
+          ls -lh org.nphil.lumaglass_*.ipk
+          sha256sum org.nphil.lumaglass_*.ipk

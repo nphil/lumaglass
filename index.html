@@ -1,0 +1,171 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=1920, height=1080, user-scalable=no">
+<title>LumaGlass</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div id="app">
+
+  <header id="header">
+    <div id="header-title">
+      <span id="header-mark">LumaGlass</span>
+      <span id="header-tagline">Liquid glass home screen</span>
+    </div>
+    <div id="status-card" class="glass">
+      <div class="status-item">
+        <span class="status-label">Applied</span>
+        <span class="status-value" id="stat-applied">&#8211;</span>
+      </div>
+      <div class="status-item">
+        <span class="status-label">Mounts</span>
+        <span class="status-value" id="stat-mounts">&#8211;</span>
+      </div>
+      <div class="status-item">
+        <span class="status-label">Version</span>
+        <span class="status-value" id="stat-version">&#8211;</span>
+      </div>
+      <div class="status-item">
+        <span class="status-label">Firmware</span>
+        <span class="status-value" id="stat-firmware">&#8211;</span>
+      </div>
+      <div class="status-item">
+        <span class="status-label">Model</span>
+        <span class="status-value" id="stat-model">&#8211;</span>
+      </div>
+    </div>
+  </header>
+
+  <main id="rows">
+
+    <section class="row glass focusable" id="row-apply" tabindex="0" data-role="apply">
+      <div class="row-main">
+        <span class="row-title">Apply LumaGlass</span>
+        <span class="row-sub">Mount the glass compositor and reskinned home screen</span>
+      </div>
+      <span class="row-chevron">&#8250;</span>
+    </section>
+
+    <section class="row glass focusable danger" id="row-revert" tabindex="0" data-role="revert">
+      <div class="row-main">
+        <span class="row-title">Revert to stock</span>
+        <span class="row-sub">Unmount everything and restore the original home screen</span>
+      </div>
+      <span class="row-chevron">&#8250;</span>
+    </section>
+
+    <section class="row glass focusable" id="row-persist" tabindex="0" data-role="persist">
+      <div class="row-main">
+        <span class="row-title">Run at boot</span>
+        <span class="row-sub">Re-apply LumaGlass automatically after every restart</span>
+      </div>
+      <span class="row-toggle" id="toggle-persist" data-on="false">
+        <span class="row-toggle-knob"></span>
+      </span>
+    </section>
+
+    <section class="row glass focusable" id="row-fps" tabindex="0" data-role="fps">
+      <div class="row-main">
+        <span class="row-title">FPS overlay</span>
+        <span class="row-sub">Show the compositor debug frame counter</span>
+      </div>
+      <span class="row-toggle" id="toggle-fps" data-on="false">
+        <span class="row-toggle-knob"></span>
+      </span>
+    </section>
+
+    <section class="row glass focusable" id="row-ntfy" tabindex="0" data-role="ntfy">
+      <div class="row-main">
+        <span class="row-title">ntfy notifications</span>
+        <span class="row-sub" id="ntfy-sub">off</span>
+      </div>
+      <span class="row-chevron">&#8250;</span>
+    </section>
+
+    <section class="row glass focusable" id="row-ntfy-test" tabindex="0" data-role="ntfy-test">
+      <div class="row-main">
+        <span class="row-title">Send test notification</span>
+        <span class="row-sub">Push a sample alert to the configured ntfy topic</span>
+      </div>
+      <span class="row-chevron">&#8250;</span>
+    </section>
+
+    <section class="row glass focusable" id="row-log" tabindex="0" data-role="log">
+      <div class="row-main">
+        <span class="row-title">View log</span>
+        <span class="row-sub">Last 40 lines from the LumaGlass activity log</span>
+      </div>
+      <span class="row-chevron">&#8250;</span>
+    </section>
+
+  </main>
+
+  <footer id="footer">
+    <span id="footer-hint">&#8593;&#8595; navigate &#8226; Enter select &#8226; Back exit</span>
+    <span id="footer-status" aria-live="polite"></span>
+  </footer>
+
+  <!-- Confirm revert overlay -->
+  <div class="overlay" id="overlay-confirm-revert" hidden>
+    <div class="overlay-panel glass danger-panel">
+      <h2>Revert to stock?</h2>
+      <p>This unmounts LumaGlass and restores the original webOS home screen. Boot-time re-apply will also be turned off.</p>
+      <div class="overlay-actions">
+        <button class="overlay-btn focusable" id="confirm-revert-yes" tabindex="0" data-role="confirm-revert-yes">Yes, revert</button>
+        <button class="overlay-btn focusable" id="confirm-revert-no" tabindex="0" data-role="confirm-revert-no">Cancel</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Applying busy overlay -->
+  <div class="overlay overlay-busy" id="overlay-apply-busy" hidden>
+    <div class="overlay-panel glass busy-panel">
+      <div class="spinner"></div>
+      <h2>Applying LumaGlass</h2>
+      <p>The screen will flash and Home will restart. This normally takes 20&#8211;40 seconds &#8211; please wait.</p>
+    </div>
+  </div>
+
+  <!-- Generic busy overlay for short actions -->
+  <div class="overlay overlay-busy" id="overlay-busy" hidden>
+    <div class="overlay-panel glass busy-panel">
+      <div class="spinner"></div>
+      <h2 id="busy-message">Working&#8230;</h2>
+    </div>
+  </div>
+
+  <!-- ntfy URL editor -->
+  <div class="overlay" id="overlay-ntfy" hidden>
+    <div class="overlay-panel glass">
+      <h2>ntfy topic URL</h2>
+      <p>Enter the full ntfy topic URL to receive LumaGlass alerts.</p>
+      <input type="text" id="ntfy-input" class="text-input focusable" tabindex="0" data-role="ntfy-input"
+             placeholder="https://ntfy.sh/your-topic" autocomplete="off" autocapitalize="off" spellcheck="false">
+      <div class="overlay-actions">
+        <button class="overlay-btn focusable" id="ntfy-save" tabindex="0" data-role="ntfy-save">Save</button>
+        <button class="overlay-btn focusable" id="ntfy-off" tabindex="0" data-role="ntfy-off">Turn off</button>
+        <button class="overlay-btn focusable" id="ntfy-cancel" tabindex="0" data-role="ntfy-cancel">Cancel</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Log panel -->
+  <div class="overlay" id="overlay-log" hidden>
+    <div class="overlay-panel glass log-panel">
+      <h2>Activity log</h2>
+      <pre class="log-content focusable" id="log-content" tabindex="0" data-role="log-content"></pre>
+      <div class="overlay-actions">
+        <button class="overlay-btn focusable" id="log-close" tabindex="0" data-role="log-close">Close</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Error toast -->
+  <div class="toast" id="toast" hidden></div>
+
+</div>
+<script src="app.js" defer></script>
+</body>
+</html>

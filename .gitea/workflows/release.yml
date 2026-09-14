@@ -1,0 +1,42 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate tag matches version
+        run: |
+          TAG="${GITHUB_REF#refs/tags/}"
+          VERSION=$(jq -r '.version' appinfo.json)
+          [ "$TAG" = "v$VERSION" ] || { echo "Tag $TAG does not match version v$VERSION"; exit 1; }
+          echo "Version: $VERSION"
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Build IPK
+        run: |
+          sh tools/build-ipk.sh
+
+      - name: Generate manifest.json
+        run: |
+          node tools/gen-manifest.js org.nphil.lumaglass_*.ipk manifest.json
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            org.nphil.lumaglass_*.ipk
+            manifest.json
+          draft: false
+          prerelease: false
+          generate_release_notes: true

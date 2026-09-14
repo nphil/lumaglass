@@ -1,0 +1,15 @@
+{
+  "id": "org.nphil.lumaglass",
+  "version": "0.1.0",
+  "type": "web",
+  "title": "LumaGlass",
+  "appDescription": "Liquid glass home screen for rooted LG webOS TVs",
+  "vendor": "nphil",
+  "main": "index.html",
+  "icon": "icon.png",
+  "largeIcon": "largeIcon.png",
+  "splashBackground": "splash.png",
+  "iconColor": "#26233a",
+  "requiredPermissions": ["all"],
+  "transparent": false
+}
