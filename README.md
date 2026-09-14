@@ -104,14 +104,21 @@ the suspend request with `rebootToSuspend`, and the set reboots about 6s
 after entering standby. The compositor restart provokes exactly one such
 report (inputcommon's teardown), which the apply now removes.
 
-One report is not this mod's. `webos-sddp`, LG's Control4 discovery service,
-crashes on the first wake from active standby on this firmware, and its
+The other report seen is not this mod's, and not LG's fault either.
+`webos-sddp`, LG's Control4 discovery service, segfaults in `SDDPSetDevice`
+whenever it reads the interface list and finds a point-to-point interface
+carrying the multicast flag - a Tailscale `tun` on the reference set. Proven
+by stopping tailscaled: without the tunnel it starts and stays up. A stock
+set has no such interface. At boot it starts before Tailscale's hook creates
+the tunnel, then re-reads interfaces on the first wake and dies there; its
 report arms the same reboot at the next power-off. The **Instant on** toggle
 (`standby warm`) turns Quick Start+ on and `enableSDDP` off, remembering the
 previous value; turning it off (`standby cold`) turns Quick Start+ off and
 restores SDDP. Warm: instant power-on with the mod already up, higher
 standby draw, no Control4 discovery. Cold: lowest standby draw, a ~35s boot
-at every power-on. `status` reports the live mode as `standby`.
+at every power-on. `status` reports the live mode as `standby`. A set with
+no VPN interface and no Control4 could leave SDDP on; the toggle turns it
+off regardless because the crash is silent and costs a cold boot.
 
 ## Firmware Compatibility
 
