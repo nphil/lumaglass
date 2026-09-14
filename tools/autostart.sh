@@ -62,6 +62,8 @@ fi
 # needs, as early as the hook allows. Any later compositor start reads the
 # modded QML on its own.
 if [ "$1" = "--worker" ]; then
+  # Tells apply it is on the boot path: never force the panel on.
+  LUMAGLASS_BOOT=1; export LUMAGLASS_BOOT
   bb=$("$CLI" boot-bind 2>&1)
   log "boot-bind: $(echo "$bb" | tr -d '\n' | cut -c1-200)"
   out=$("$CLI" apply 2>&1)
