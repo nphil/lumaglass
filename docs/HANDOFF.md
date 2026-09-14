@@ -167,6 +167,12 @@ Two reports were arming it.
    history; the three failed units (`broadcast-configd`, `f2io-on`, `gibbs`)
    are tuner one-shots that fail at 12-18 s, before the tunnel exists.
 
+   Tailscale was removed from the set on 2026-09-14 (node logged out, daemon,
+   init.d hook and `/media/developer/tailscale` deleted). Remote terminal
+   access goes through the Unraid node's subnet routes instead; nothing on
+   the set depends on a tunnel any more, and `enableSDDP` is off only because
+   the Instant on toggle sets it.
+
 Measured after both: three power-off / wake cycles of 150 s each with no
 reboot, uptime carrying across, the same compositor still running, and Home
 from a warm wake painting in 8 s (`evidence/home-after-warm-wake.png`).
