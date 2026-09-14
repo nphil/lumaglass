@@ -6,6 +6,27 @@ how to measure again. Facts here were observed on one set unless marked
 [INFERENCE]. Credentials and the set's address are deliberately absent; they
 live with the owner.
 
+## The rule that must not be broken
+
+https://rootmy.tv/warning — **never write to the kernel, rootfs or tvservice
+partitions.** A set bricked that way is not recoverable in software.
+
+Everything this project does stays inside that boundary, deliberately:
+
+- Only bind mounts and files under `/var` (writable ext4) and
+  `/media/developer`. Never a raw write to a block device.
+- The single exception is `snapshot-boot-manager --remove`, which clears the
+  hibernation image on `mmcblk0p54`. That is LG's own tool on its own
+  scratch partition, the kernel rebuilds the image on the next boot, and the
+  worst case is one slow cold boot. It is not a firmware partition.
+- `/usr`, `/etc`, `/lib` and `/mnt` are read-only overlays with lowerdir only
+  and cannot be written even as root, which is why the mod shadows the
+  compositor module and bind-mounts over Home's assets instead of editing
+  them in place.
+- No firmware flashing, no `dd` to `mmcblk0*`, no epk handling.
+
+If a future change needs a partition write, stop and reconsider the design.
+
 ## The set
 
 - LG OLED65C4PUA, model code `o22n2`, webOS 10.2.1, firmware 33.22.52, MediaTek
@@ -214,18 +235,47 @@ a 1.7 GB firmware update and put its NSU alert up at boot+34 s for 30 s on
 every boot. tvweb 0.34.3 carries those hosts whenever
 `/var/luna/preferences/webosbrew_block_updates` exists.
 
-tvweb also offers QML screen saver replacements, bind-mounted over the whole
-`com.webos.app.screensaver` directory behind a copy of the stock
-`appinfo.json`. On webOS 10 that app is Flutter (`"type": "flutter"`, code in
-`lib/libapp.so`), so every launch failed "Unable to start engine without AOT
-data" and exited 85 ms later, and tvpower then refused further requests
-(`InvalidStatechangeRequest`) until a power cycle - the set showed no screen
-saver at all. This is not the compositor widgets: with stock restored, LG's
-idle detector `com.webos.service.nop` called `power2/turnOnScreenSaver`
-exactly 180 s after the last input and the stock app stayed up. tvweb 0.34.4
-reads the stock app type, keeps the replacements off non-QML firmware, and
-restores stock at startup if one is mounted. Screen saver idle time on this
-set is 3 minutes; `screenSaverTime` is not a settingsservice key here.
+tvweb used to offer QML screen saver replacements. They are gone as of tvweb
+0.35.0, and the reason is worth keeping because it applies to any webOS 10
+set.
+
+The community mechanism (`webosbrew/custom-screensaver` and forks such as
+`aabytt/custom-screensaver-aerial`) is a **single-file** bind:
+
+    mount --bind our.qml /usr/palm/applications/com.webos.app.screensaver/qml/main.qml
+
+Nothing else is touched, so the app SAM scanned is unchanged: no type change,
+no SAM restart, and a boot hook re-applying it is enough. It works because on
+webOS 5 to 23 the stock screen saver is a QML app - exactly the compatibility
+range those projects advertise.
+
+webOS 10 rewrote it in Flutter. The app directory holds `appinfo.json` with
+`"type": "flutter"`, `data/flutter_assets/` and `lib/libapp.so`, and there is
+no `qml/` directory at all, so aerial's own `apply.sh` exits "Target file does
+not exist" here. tvweb's screen savers descended from that lineage, which is
+why they never ran: every launch failed "Unable to start engine without AOT
+data" and exited 85 ms later, and after a few of those tvpower refused all
+further requests (`InvalidStatechangeRequest`) until a power cycle - the set
+showed no screen saver at all. That, not the compositor widgets, was the cause
+of "the screen saver never kicks in".
+
+Rejected alternatives, all tested on the set:
+
+- Binding our own directory over the whole app with a QML `appinfo.json` does
+  run, but only after SAM re-reads the app type, which it caches at its boot
+  scan (5s) while any writable filesystem arrives at ~13s. `systemctl restart
+  sam` forces it and works, at the cost of a dropped Home and an `eim` crash
+  whose report makes faultmanager reboot the set at the next power-off. It
+  would also need repeating every boot.
+- A copy under `/media/developer/apps` or `/media/cryptofs/apps` with the same
+  app id is ignored: SAM dedupes by id and the system copy wins. Confirmed on
+  two cold boots.
+
+With stock restored, LG's idle detector `com.webos.service.nop` calls
+`power2/turnOnScreenSaver` exactly 180 s after the last input and the stock app
+stays up. Idle time is 3 minutes; `screenSaverTime` is not a settingsservice
+key on this firmware. A Flutter build of our own would be the only native route
+and was not attempted.
 
 ## Compositor restart side effects still worth knowing
 
@@ -254,3 +304,19 @@ The mod removes only the reports its own restart produced.
 `research/home-launcher-replacements.md` surveys other rooted-webOS home
 replacements and the input-hook tooling around them; it informed the choice
 to mod the compositor and Home in place rather than launch over them.
+
+Prior art worth reading before designing anything new:
+
+- `webosbrew/custom-screensaver` and its fork
+  `aabytt/custom-screensaver-aerial` — the single-file bind over
+  `qml/main.qml`, and the cleanest example of modding a stock app without
+  touching what SAM scanned. Its compatibility stopping at webOS 23 is the
+  tell that LG changed the app's runtime.
+- `webosbrew/webos-homebrew-channel` — the root elevation, the `init.d`
+  runner this mod hooks, the failsafe flag, and the `/etc/hosts` update
+  block.
+- `openlgtv` — firmware archaeology rather than runtime modding:
+  `epk2extract` unpacks LG firmware images (useful for reading a stock app or
+  binary from a newer release without owning that set), plus buildroot trees
+  and `nsu_emu`, an update-server emulator. Nothing needed for this project,
+  but it is where to look when a question is "what changed in firmware X".
