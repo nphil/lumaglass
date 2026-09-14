@@ -192,13 +192,41 @@ restart_surface() {
   return 0
 }
 
-surface_start_epoch() {
-  # Wall-clock start time of the running compositor. /proc/<pid>'s own mtime is
-  # the process start time, which is cheaper and steadier than deriving it from
-  # field 22 of /proc/<pid>/stat plus boot time.
+surface_start_uptime() {
+  # Seconds after boot at which the running compositor started, from field 22
+  # of /proc/<pid>/stat (clock ticks since boot, CLK_TCK=100 on this kernel).
+  #
+  # Not /proc/<pid>'s mtime. That is only the time the /proc entry was last
+  # instantiated - on this kernel it read "176s ago" for a compositor that
+  # had been running for 829s - and trusting it made apply skip a restart the
+  # compositor needed, leaving stock QML under a modded layout.
+  #
+  # Monotonic on purpose: the wall clock is unsynchronised for the first
+  # seconds of boot (systemd stamps early units in 2022), so any comparison in
+  # epoch seconds across that window is meaningless.
   p=$(pgrep -x surface-manager 2>/dev/null | head -n1)
   [ -n "$p" ] || return 1
-  stat -c %Y "/proc/$p" 2>/dev/null
+  t=$(awk '{print int($22 / 100)}' "/proc/$p/stat" 2>/dev/null)
+  [ -n "$t" ] || return 1
+  printf '%s\n' "$t"
+}
+
+boot_id() { cat /proc/sys/kernel/random/boot_id 2>/dev/null; }
+uptime_s() { cut -d. -f1 /proc/uptime 2>/dev/null; }
+
+record_bound_now() {
+  # The content now live was bound at this instant of this boot. Scoped to the
+  # boot id so a stale record from a previous boot can never be mistaken for
+  # this one's.
+  printf '%s %s\n' "$(boot_id)" "$(uptime_s)" > "$BOUND_AT"
+}
+
+bound_at_uptime() {
+  # Seconds after boot the live content was bound, or nothing if the record is
+  # missing or from another boot.
+  read -r bid up < "$BOUND_AT" 2>/dev/null || return 1
+  [ "$bid" = "$(boot_id)" ] || return 1
+  printf '%s\n' "$up"
 }
 
 panel_is_active() {
@@ -345,15 +373,6 @@ all_binds_live() {
     is_mounted "$t" || return 1
   done
   return 0
-}
-
-shader_failed_since() {
-  # $1 = epoch. /var/log/messages spans boots and its lines start with an ISO
-  # UTC timestamp, so a lexical compare on the first field selects everything
-  # logged at or after that instant.
-  since=$(date -u -d "@$1" '+%Y-%m-%dT%H:%M:%S' 2>/dev/null)
-  [ -n "$since" ] && [ -r "$MSGLOG" ] || return 1
-  awk -v b="$since" '$1 >= b' "$MSGLOG" 2>/dev/null | grep -qa 'shader compilation failed'
 }
 
 # ------------------------------------------------------------------- revert
@@ -558,44 +577,48 @@ verb_apply() {
         return 1
       fi
     done
-    date +%s > "$BOUND_AT"
+    record_bound_now
   fi
 
   # 6. Restart the compositor only if it needs it.
   #
   # The compositor reads the QML once, at startup. If it started AFTER the
-  # content it is showing went live - the case when boot-bind won the race at
-  # boot, or after a no-op re-apply - it already loaded the modded QML and a
-  # restart only blacks the screen for 15s for nothing. That restart on the
-  # boot path is also what used to get interrupted by the set powering off,
-  # leaving Homebrew Channel's failsafe flag armed.
-  bind_epoch=$(cat "$BOUND_AT" 2>/dev/null); [ -n "$bind_epoch" ] || bind_epoch=$(date +%s)
+  # content it is showing went live - a no-op re-apply, or a compositor that
+  # came up on its own after the binds - it already loaded the modded QML and
+  # a restart only blacks the screen for 15s for nothing. On a cold boot it
+  # never has: the compositor starts at boot+2s and Homebrew Channel's hooks
+  # run at boot+20s, so that path always takes exactly one restart.
+  bound_up=$(bound_at_uptime)
+  [ -n "$bound_up" ] || { record_bound_now; bound_up=$(bound_at_uptime); }
 
   restart_needed=1
-  s_epoch=$(surface_start_epoch)
-  if [ -z "$s_epoch" ]; then
-    # Boot path: the compositor has not started yet, so it will read the modded
-    # QML when it does.
+  start_up=$(surface_start_uptime)
+  if [ -z "$start_up" ]; then
+    # The compositor is not running, so it will read the modded QML when it
+    # next starts.
     restart_needed=0
-    log_line "apply: compositor not running, binds staged for its first start"
-  elif [ "$s_epoch" -ge "$bind_epoch" ] 2>/dev/null; then
+    log_line "apply: compositor not running, binds staged for its next start"
+  elif [ "$start_up" -ge "$bound_up" ] 2>/dev/null; then
     restart_needed=0
-    log_line "apply: compositor started at $s_epoch, after binds at $bind_epoch, no restart needed"
+    log_line "apply: compositor started at boot+${start_up}s, after binds at boot+${bound_up}s, no restart needed"
   elif ! panel_is_active; then
     # Nothing is being presented, so the next natural compositor start will
     # pick the binds up. Forcing one here races the power transition.
     restart_needed=0
     log_line "apply: panel not active, binds staged for next compositor start"
+  else
+    log_line "apply: compositor started at boot+${start_up}s, before binds at boot+${bound_up}s, restarting"
   fi
 
-  # Failures are judged from the moment the compositor that read this content
-  # started: after our restart, or at its own start when no restart was needed.
-  check_from="$s_epoch"
+  # 7. Restart if needed, then verify no shader compile failure was logged by
+  # the compositor that read this content. The log spans boots and its early
+  # lines carry an unsynchronised clock, so the check is anchored on a line
+  # count taken just before our restart - never on a timestamp. A compositor
+  # we did not restart already passed this check in the apply that stamped
+  # the set as verified.
   if [ "$restart_needed" -eq 1 ]; then
-    check_from=$(date +%s)
-    # From here on the content is what the (restarted) compositor shows, so a
-    # later no-op apply must not restart it again.
-    printf '%s\n' "$check_from" > "$BOUND_AT"
+    marker=$(wc -l < "$MSGLOG" 2>/dev/null | tr -d ' '); [ -n "$marker" ] || marker=0
+    record_bound_now
     if ! restart_surface; then
       log_line "apply: surface-manager-daemon did not come back active"
       do_revert_internal
@@ -605,16 +628,14 @@ verb_apply() {
     fi
     kill_home_app
     relaunch_home
-  fi
-
-  # 7. Verify: no shader compile failures logged by that compositor; auto-revert if so.
-  if [ -n "$check_from" ] && shader_failed_since "$check_from"; then
-    log_line "apply: shader compilation failure detected, auto-reverting"
-    rm -f "$VERIFIED"
-    do_revert_internal
-    ntfy_notify "LumaGlass apply failed: shader compilation error, auto-reverted to stock"
-    emit_error "shader compilation failed; auto-reverted to stock"
-    return 1
+    if sed -n "$((marker+1)),\$p" "$MSGLOG" 2>/dev/null | grep -qa 'shader compilation failed'; then
+      log_line "apply: shader compilation failure detected post-restart, auto-reverting"
+      rm -f "$VERIFIED"
+      do_revert_internal
+      ntfy_notify "LumaGlass apply failed: shader compilation error, auto-reverted to stock"
+      emit_error "shader compilation failed; auto-reverted to stock"
+      return 1
+    fi
   fi
   staged_hash > "$VERIFIED"
 
@@ -629,13 +650,16 @@ verb_apply() {
 # ---------------------------------------------------------------- boot-bind
 
 verb_boot_bind() {
-  # The boot hook's opening move. At boot the compositor starts about two
-  # seconds after Homebrew Channel's hooks run, and a full apply spends ~5s
-  # staging before its binds land - so the compositor reads stock QML and has
-  # to be restarted, which is the boot-time black screen. This binds the
-  # previous boot's staged set in well under a second, so the compositor reads
-  # the modded copy on its own first start. The apply that follows then finds
-  # nothing to change and no restart to make.
+  # The boot hook's opening move: mount the previous boot's staged set in well
+  # under a second, before the ~5s a full apply spends staging.
+  #
+  # On this firmware that does not avoid the boot restart. The compositor
+  # starts at boot+2s and Homebrew Channel's hooks run at boot+20s, so it has
+  # always read stock QML by the time anything of ours can run, and /etc is a
+  # read-only overlay with no way to order a unit ahead of it. What binding
+  # first buys is that the one restart happens as early as the hook allows,
+  # and that any compositor start after this point - a crash respawn, a power
+  # transition that recycles it - picks the modded QML up with no restart.
   #
   # It only ever binds a set that a full apply has already verified on this
   # firmware, and it skips itself once after a boot that never reported ok.
@@ -671,7 +695,7 @@ verb_boot_bind() {
     mount --bind "$ASSETS" "$STOCK_ASSETS" >/dev/null 2>&1 && n=$((n+1))
   fi
   if all_binds_live; then
-    date +%s > "$BOUND_AT"
+    record_bound_now
     log_line "boot-bind: $n bind(s) made, all live"
     printf '{"ok":true,"bound":true,"mounts":%s}\n' "$(count_mounts)"
   else
