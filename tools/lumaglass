@@ -71,6 +71,14 @@ SHADOW_QML="$SHADOW_MODULE/$MODULE_RELPATH"
 # stale QML to new libraries, so the hook rebuilds whenever this stops
 # matching, and falls back to stock if it cannot.
 SHADOW_STOCK_FP="$STATE/.shadow-stock"
+# Fingerprint of the shadow tree itself, recorded once it is fully built.
+# /var is ext4 data=ordered: directory entries are journalled, file contents
+# are not. A power cut between renaming the shadow into place and its data
+# reaching disk leaves a module with every file present and most of them
+# truncated - 318 files holding 212KB instead of 2030741 bytes, observed. The
+# compositor then starts on it, resolves nothing and presents a black screen,
+# so integrity has to be checked against this, not just the one file we inject.
+SHADOW_SELF_FP="$STATE/.shadow-self"
 ENV_DIR=/var/systemd/system/env
 ENV_FILE="$ENV_DIR/surface-manager.env"
 STOCK_ASSETS=/usr/palm/applications/com.webos.app.home/data/flutter_assets/assets
@@ -409,30 +417,47 @@ stock_module_fp() {
   ls -lnR "$STOCK_QML_MODULE" 2>/dev/null | md5sum | cut -c1-32
 }
 
+shadow_self_fp() {
+  # Identity of the shadow tree. The listing carries every file's size, so a
+  # truncated copy fails this even though the file is present.
+  ls -lnR "$SHADOW_ROOT" 2>/dev/null | md5sum | cut -c1-32
+}
+
 build_shadow() {
-  # Rebuild the shadow module from the stock one, swap our staged QML into
-  # it, and record which stock module it came from. Built next to the live
-  # copy and renamed into place so a compositor starting mid-build never
-  # sees a half-copied module.
+  # Rebuild the shadow module from the stock one, swap our staged QML into it,
+  # and record both what it was built from and what it now contains. Built
+  # beside the live copy and renamed in, so a compositor starting mid-build
+  # never sees a half-copied module.
   [ -d "$STOCK_QML_MODULE" ] || return 1
   [ -f "$COMPOSITOR_STAGE" ] || return 1
   rm -rf "$SHADOW_ROOT.next" 2>/dev/null
   mkdir -p "$SHADOW_ROOT.next" 2>/dev/null || return 1
   cp -a "$STOCK_QML_MODULE" "$SHADOW_ROOT.next/" 2>/dev/null || { rm -rf "$SHADOW_ROOT.next"; return 1; }
   cp -f "$COMPOSITOR_STAGE" "$SHADOW_ROOT.next/WebOSCompositor/$MODULE_RELPATH" 2>/dev/null || { rm -rf "$SHADOW_ROOT.next"; return 1; }
+
+  # Get the contents on disk BEFORE the rename publishes them. /var is ext4
+  # data=ordered, so without this a power cut can commit the directory entries
+  # and lose the data, leaving a complete-looking module full of truncated
+  # files that the compositor will happily start on and render nothing from.
+  sync
+
   rm -rf "$SHADOW_ROOT.old" 2>/dev/null
   [ -d "$SHADOW_ROOT" ] && mv "$SHADOW_ROOT" "$SHADOW_ROOT.old"
   mv "$SHADOW_ROOT.next" "$SHADOW_ROOT" || { [ -d "$SHADOW_ROOT.old" ] && mv "$SHADOW_ROOT.old" "$SHADOW_ROOT"; return 1; }
   rm -rf "$SHADOW_ROOT.old" 2>/dev/null
   stock_module_fp > "$SHADOW_STOCK_FP"
+  shadow_self_fp > "$SHADOW_SELF_FP"
+  sync
   return 0
 }
 
 shadow_current() {
-  # The shadow is usable if it carries exactly the staged QML and was built
-  # from the stock module that is installed right now.
+  # Usable means all three: it still holds exactly the staged QML, it is
+  # byte-for-byte the tree we published, and it was built from the stock
+  # module installed right now.
   [ -f "$SHADOW_QML" ] || return 1
   [ "$(md5sum < "$SHADOW_QML" 2>/dev/null)" = "$(md5sum < "$COMPOSITOR_STAGE" 2>/dev/null)" ] || return 1
+  [ "$(cat "$SHADOW_SELF_FP" 2>/dev/null)" = "$(shadow_self_fp)" ] || return 1
   [ "$(cat "$SHADOW_STOCK_FP" 2>/dev/null)" = "$(stock_module_fp)" ] || return 1
   return 0
 }
@@ -502,7 +527,7 @@ do_revert_internal() {
   remove_env
   if [ -d "$SHADOW_ROOT" ]; then REVERT_CHANGED=1; fi
   rm -rf "$SHADOW_ROOT" "$SHADOW_ROOT.next" "$SHADOW_ROOT.old" 2>/dev/null
-  rm -f "$SHADOW_STOCK_FP" 2>/dev/null
+  rm -f "$SHADOW_STOCK_FP" "$SHADOW_SELF_FP" 2>/dev/null
 
   if is_mounted "$STOCK_ASSETS"; then REVERT_CHANGED=1; fi
   drain_umount "$STOCK_ASSETS"
@@ -804,13 +829,31 @@ verb_boot_bind() {
   fi
 
   if ! shadow_current; then
-    log_line "boot-bind: shadow module stale against stock, rebuilding"
+    # Either the firmware replaced the stock module, or the shadow itself is
+    # damaged - a power cut mid-build leaves every file present and most of
+    # them truncated. Both mean the module on disk cannot be trusted.
+    log_line "boot-bind: shadow module not current (stale or damaged), rebuilding"
     if build_shadow; then
       log_line "boot-bind: shadow module rebuilt"
+      # The compositor started before this hook did. If it loaded the module we
+      # have just replaced, it is running on the bad one - and a compositor
+      # that started on a truncated module comes up healthy and presents
+      # nothing, so no liveness check catches it. Restart it once.
+      if compositor_has_shadow && panel_is_active; then
+        log_line "boot-bind: compositor had loaded the damaged module, restarting it"
+        restart_surface >/dev/null 2>&1
+        kill_home_app
+        relaunch_home
+      fi
     else
       log_line "boot-bind: shadow rebuild failed, dropping env file"
       remove_env
-      ntfy_notify "LumaGlass disabled itself: compositor module changed"
+      if compositor_has_shadow && panel_is_active; then
+        restart_surface >/dev/null 2>&1
+        kill_home_app
+        relaunch_home
+      fi
+      ntfy_notify "LumaGlass disabled itself: compositor module unusable"
       printf '{"ok":true,"bound":false,"reason":"stale-module"}\n'
       return 0
     fi
