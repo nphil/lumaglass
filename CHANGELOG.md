@@ -5,6 +5,30 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.3] - 2026-09-14
+
+### Fixed
+
+- A boot could leave the modded Home layout with the stock compositor: no
+  wallpaper, no clock, weather or news. `apply` only restarted the compositor
+  when the panel already reported Active, and on a boot where the panel had not
+  finished waking it skipped the restart and nothing retried, so the set ran the
+  whole session on stock QML. The restart now happens whenever the running
+  compositor lacks the shadow module, whatever the panel is doing; a restart
+  while the panel is dark is invisible, never restarting is not
+
+### Changed
+
+- The claim that the compositor picks the override up on its first start is
+  withdrawn. Measured across consecutive boots it takes the global
+  `DefaultEnvironment` from `/etc/systemd/system.conf.d/30-webos-global.conf`
+  instead of the unit's `EnvironmentFile`, although the same file applies to
+  every later restart, and `var.mount` completes at 1.946s while
+  `surface-manager-daemon` does not start until 2.591s - so the file was
+  readable. Cause not established, and nothing depends on it any more. One
+  restart per boot remains the norm; what keeps power-off immediate is clearing
+  the crash reports that restart produces, not avoiding the restart
+
 ## [0.3.2] - 2026-09-14
 
 ### Fixed

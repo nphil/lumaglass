@@ -50,17 +50,24 @@ BG_4K_SRC="$APPDIR/payload/wallpaper/bg_4k.png"
 # reads an optional environment file from /var - which is writable and
 # persistent. So instead of bind-mounting our QML over the read-only module in
 # /usr, we keep a full shadow copy of the WebOSCompositor module with our file
-# swapped in, and point the import path at it. The compositor then loads the
-# modded QML at boot+2s when it first starts, which is the only way to avoid
-# restarting it: it reads QML exactly once, and no bind of ours can land
-# before it starts.
+# swapped in, and point the import path at it. Nothing of ours is mounted over
+# /usr, which is an overlay with lowerdir only and can never be written.
 #
-# This matters for more than the stock-Home flash. A compositor restart makes
-# LG's igallery preview segfault in QFontDatabase::removeAllApplicationFonts
-# (reproducible on stock firmware with no mod present), faultmanager records
-# the crash, and tvpowerd then answers the next power-off with a
-# reboot-to-suspend instead of an instant standby. Not restarting the
-# compositor is what keeps power-off immediate.
+# The intent was for the compositor's first start to load the modded QML with
+# no restart at all. It does not: measured across consecutive boots, the first
+# start takes the global DefaultEnvironment from
+# /etc/systemd/system.conf.d/30-webos-global.conf instead of our
+# EnvironmentFile, though the same file applies to every later restart. So one
+# restart per boot is still the norm; apply forces it whenever the running
+# compositor lacks the shadow.
+#
+# A compositor restart is not just a visible flash. It makes LG's igallery
+# preview segfault in QFontDatabase::removeAllApplicationFonts (reproducible
+# on stock firmware with no mod present), faultmanager records the crash with
+# recovery rebootToSuspend, and tvpowerd then answers the next power-off with
+# a full reboot into standby instead of switching off. Since the restart has
+# not been eliminated, what keeps power-off immediate is restart_surface
+# removing the crash reports its own restart produced.
 STOCK_QML_MODULE=/usr/lib/qt5/qml/WebOSCompositor
 MODULE_RELPATH=views/fullscreen/StarfishFullscreenContainer.qml
 SHADOW_ROOT="$STATE/qml"
@@ -722,15 +729,24 @@ verb_apply() {
   # 6. Bring the change on screen.
   #
   # The compositor only reads QML at startup, so the shadow reaches the screen
-  # when it next starts. On the boot path that is its very first start at
-  # boot+2s: the env file is already in place, so it comes up on the modded
-  # QML with no restart and no stock-Home flash. Interactively, the compositor
-  # is already running on stock QML and the panel is live, so it needs one
-  # restart to re-read - the one case where we pay for a restart, and where
-  # restart_surface cleans up the crash reports that restart provokes.
-  # Home is always relaunched so it re-reads the bound assets.
+  # when it next starts. The env override is meant to make that its very first
+  # start at boot+2s, and it does apply reliably to any restart - but it has
+  # been observed NOT to apply to the first start at boot, on consecutive
+  # boots, even though var.mount completes at 1.946s and
+  # surface-manager-daemon does not start until 2.591s, so the file was there
+  # to be read. Cause not established. Whatever it is, correctness cannot
+  # depend on it: if the compositor that is running does not have the shadow,
+  # restart it.
+  #
+  # Deliberately NOT gated on panel_is_active. That gate was here to avoid
+  # racing a power transition, and it silently abandoned the restart instead:
+  # on a boot where the panel had not finished waking, apply skipped it, and
+  # nothing ever retried, so the set ran the whole session on stock QML under
+  # a modded Home layout. A restart while the panel is dark is invisible;
+  # never restarting is not. restart_surface cleans up the crash reports the
+  # restart provokes, which is what keeps power-off immediate.
   restart_needed=0
-  if surface_start_uptime >/dev/null 2>&1 && panel_is_active && ! compositor_has_shadow; then
+  if surface_start_uptime >/dev/null 2>&1 && ! compositor_has_shadow; then
     restart_needed=1
   fi
 
@@ -774,15 +790,16 @@ verb_apply() {
 
 verb_boot_bind() {
   # The boot hook's opening move. The env file persists in /var, so the
-  # compositor that started at boot+2s has normally already loaded the shadow
-  # module and there is no race left to win. Normally, not always: var.mount
-  # goes active at 1.946s and the compositor starts at ~2s, and
-  # surface-manager-daemon is ordered against mount-readonly-volatile (1.315s),
-  # not against var.mount, so there is no guarantee /var is up when systemd
-  # reads the EnvironmentFile. If that ~50ms race is lost the env file is
-  # simply absent and the compositor comes up stock; the apply that follows
-  # this sees a live panel with no shadow and restarts it once. Winning the
-  # race costs nothing, losing it costs what every boot used to cost.
+  # compositor's first start is meant to load the shadow with no restart.
+  # Measured, it does not: on consecutive boots the compositor came up on the
+  # global DefaultEnvironment value from
+  # /etc/systemd/system.conf.d/30-webos-global.conf rather than our
+  # EnvironmentFile, even though the file was readable by then - var.mount
+  # completes at 1.946s and surface-manager-daemon does not start until
+  # 2.591s. The same file applies reliably to any later restart. Cause not
+  # established, so nothing here relies on it: the apply that follows this
+  # restarts the compositor whenever the running one lacks the shadow, which
+  # costs exactly what every boot used to cost and is correct either way.
   #
   # What this does is bind Home's assets - a bind mount does not survive a
   # reboot - and check the two things that can make a persistent env file
