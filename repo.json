@@ -17,7 +17,7 @@
         "rootRequired": true,
         "ipkUrl": "https://github.com/nphil/lumaglass/releases/download/v0.1.0/org.nphil.lumaglass_0.1.0_all.ipk",
         "ipkHash": {
-          "sha256": "709b6dd89d23cff05e7bdb42688fdfaafb4fcc3bad8e33fadc551aa2f97f381a"
+          "sha256": "de8322a8dfe258007060addeb040cfada9d3df66ac6fad6e4ca36342e91917ed"
         }
       }
     }
