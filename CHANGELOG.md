@@ -5,6 +5,23 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.1] - 2026-09-14
+
+### Fixed
+
+- Boot hook no longer holds Homebrew Channel's failsafe window open. `startup.sh`
+  arms a failsafe flag, runs `run-parts`, then clears the flag ten seconds later;
+  applying inline took around 45 seconds, so a set powered off in that window came
+  back in failsafe mode with every root customization disabled. The hook now
+  returns immediately and applies in a detached child
+- `apply` only restarts the compositor when it has to. If the compositor started
+  after the binds went live it already loaded the modded QML, and if the panel is
+  not active the binds are left staged for its next start. Both cases previously
+  cost a needless restart, one of them on the boot path
+- `apply` and `revert` take a lock. A detached boot apply can now overlap a user
+  launching the app, and two concurrent runs could leave the wrong number of
+  mounts live
+
 ## [0.2.0] - 2026-09-14
 
 ### Added

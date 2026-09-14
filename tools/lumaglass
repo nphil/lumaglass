@@ -50,6 +50,10 @@ SURFACE_SETTLE=14
 SCREEN_ON_URI="luna://com.webos.service.tvpower/power/turnOnScreen"
 AUTOSTART_LINK=/var/lib/webosbrew/init.d/50-lumaglass
 AUTOSTART_SRC="$APPDIR/tools/autostart.sh"
+LOCKFILE=/var/lib/lumaglass/mutate.lock
+# Seconds a second mutation waits for the first to finish. An apply takes ~30s
+# at worst, so this is generous without hanging a caller forever.
+LOCK_WAIT=180
 
 VERB="${1:-}"
 
@@ -174,6 +178,36 @@ restart_surface() {
   # compositor can present a frame. Without this settle the subsequent Home
   # launch is accepted and then never composited, leaving a black screen.
   sleep "$SURFACE_SETTLE"
+  return 0
+}
+
+surface_start_epoch() {
+  # Wall-clock start time of the running compositor. /proc/<pid>'s own mtime is
+  # the process start time, which is cheaper and steadier than deriving it from
+  # field 22 of /proc/<pid>/stat plus boot time.
+  p=$(pgrep -x surface-manager 2>/dev/null | head -n1)
+  [ -n "$p" ] || return 1
+  stat -c %Y "/proc/$p" 2>/dev/null
+}
+
+panel_is_active() {
+  # Only "Active" means the panel is actually presenting. Restarting the
+  # compositor while the set is in standby or suspending is pointless work on
+  # the boot path, and it is how a half-finished apply used to be interrupted.
+  luna-send -n 1 luna://com.webos.service.tvpower/power/getPowerState '{}' 2>/dev/null \
+    | tr -d '\n' | grep -q '"state"[[:space:]]*:[[:space:]]*"Active"'
+}
+
+take_mutation_lock() {
+  # Serialise anything that mounts, unmounts or restarts the compositor. Two
+  # concurrent applies interleave their unmount/stage/bind steps and can leave
+  # the wrong number of mounts live; the boot hook made this reachable, because
+  # a user launching the app can now overlap the detached boot apply.
+  mkdir -p "$(dirname "$LOCKFILE")" 2>/dev/null
+  exec 9>"$LOCKFILE" 2>/dev/null || return 0
+  if ! flock -x -w "$LOCK_WAIT" 9 2>/dev/null; then
+    return 1
+  fi
   return 0
 }
 
@@ -317,6 +351,10 @@ do_revert_internal() {
 }
 
 verb_revert() {
+  if ! take_mutation_lock; then
+    emit_error "another apply or revert is still running"
+    return 1
+  fi
   do_revert_internal
   mounts=$(count_mounts)
   log_line "revert: changed=$REVERT_CHANGED mounts=$mounts"
@@ -328,6 +366,10 @@ verb_revert() {
 # -------------------------------------------------------------------- apply
 
 verb_apply() {
+  if ! take_mutation_lock; then
+    emit_error "another apply or revert is still running"
+    return 1
+  fi
   t0=$(date +%s)
   mkdir -p "$STATE" "$BACKUP" 2>/dev/null
 
@@ -455,19 +497,45 @@ verb_apply() {
     fi
   done
 
-  # 6. Restart compositor, bounded wait, then relaunch Home.
+  # 6. Restart the compositor only if it needs it.
+  #
+  # The compositor reads the QML once, at startup. If it started AFTER every
+  # bind went live - the normal case on the boot path, where this runs while
+  # the compositor is still coming up - it already loaded the modded QML and
+  # restarting it only blacks the screen for 15s for no reason. That restart
+  # on the boot path is also what used to get interrupted by the set powering
+  # off, leaving Homebrew Channel's failsafe flag armed.
+  bind_epoch=$(date +%s)
   start_marker=$(wc -l < "$MSGLOG" 2>/dev/null | tr -d ' '); [ -n "$start_marker" ] || start_marker=0
 
-  if ! restart_surface; then
-    log_line "apply: surface-manager-daemon did not come back active"
-    do_revert_internal
-    ntfy_notify "LumaGlass apply failed: compositor did not restart"
-    emit_error "compositor did not become active after restart"
-    return 1
+  restart_needed=1
+  s_epoch=$(surface_start_epoch)
+  if [ -z "$s_epoch" ]; then
+    # Boot path: the compositor has not started yet, so it will read the modded
+    # QML when it does.
+    restart_needed=0
+    log_line "apply: compositor not running, binds staged for its first start"
+  elif [ "$s_epoch" -ge "$bind_epoch" ] 2>/dev/null; then
+    restart_needed=0
+    log_line "apply: compositor started at $s_epoch, after binds, no restart needed"
+  elif ! panel_is_active; then
+    # Nothing is being presented, so the next natural compositor start will
+    # pick the binds up. Forcing one here races the power transition.
+    restart_needed=0
+    log_line "apply: panel not active, binds staged for next compositor start"
   fi
 
-  kill_home_app
-  relaunch_home
+  if [ "$restart_needed" -eq 1 ]; then
+    if ! restart_surface; then
+      log_line "apply: surface-manager-daemon did not come back active"
+      do_revert_internal
+      ntfy_notify "LumaGlass apply failed: compositor did not restart"
+      emit_error "compositor did not become active after restart"
+      return 1
+    fi
+    kill_home_app
+    relaunch_home
+  fi
 
   # 7. Verify: no shader compile failures logged since the marker; auto-revert if so.
   shader_fail=0

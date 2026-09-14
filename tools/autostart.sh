@@ -54,31 +54,32 @@ if ! grep -q '"persist"[[:space:]]*:[[:space:]]*true' "$STATE/config.json" 2>/de
   exit 0
 fi
 
-# Wait for the compositor. Applying before it is up is pointless: the binds
-# would land but the restart that makes them take effect would race the
-# compositor's own startup.
-waited=0
-while [ "$waited" -lt "$MAX_WAIT" ]; do
-  if systemctl is-active surface-manager-daemon.service >/dev/null 2>&1; then
-    break
-  fi
-  sleep "$POLL"
-  waited=$((waited + POLL))
-done
-
-if [ "$waited" -ge "$MAX_WAIT" ]; then
-  log "compositor not active after ${MAX_WAIT}s, giving up cleanly"
+# --worker: the detached half.
+#
+# Applies immediately rather than waiting for the compositor. Binding early is
+# what makes this cheap: if the binds are live before the compositor reads the
+# QML, it loads the modded copy on its own and no restart is needed at all.
+if [ "$1" = "--worker" ]; then
+  log "worker started, applying"
+  out=$("$CLI" apply 2>&1)
+  case "$out" in
+    *'"ok":true'*) log "apply ok" ;;
+    *)             log "apply failed: $(echo "$out" | tr -d '\n' | cut -c1-300)" ;;
+  esac
   exit 0
 fi
 
-# Let the first Home launch settle so our restart is not competing with it.
-sleep 5
-
-log "compositor up after ${waited}s, applying"
-out=$("$CLI" apply 2>&1)
-case "$out" in
-  *'"ok":true'*) log "apply ok" ;;
-  *)             log "apply failed: $(echo "$out" | tr -d '\n' | cut -c1-300)" ;;
-esac
-
+# Everything below runs DETACHED, and that is the whole point.
+#
+# Homebrew Channel's startup.sh arms a failsafe flag, runs these hooks with
+# run-parts, then clears the flag ~10s later. A hook that blocks holds that
+# window open for as long as it runs: if the set powers off before the flag is
+# cleared, the next boot comes up in failsafe mode with every root
+# customization disabled. Applying inline took ~45s, so an overnight power-off
+# landed inside the window and did exactly that.
+#
+# So: return to run-parts immediately and do the work in a detached child.
+# startup.sh closes the lock fd for children (`run-parts ... 200>&-`), so the
+# child cannot hold Homebrew Channel's startup lock either.
+setsid "$APPDIR/tools/autostart.sh" --worker </dev/null >/dev/null 2>&1 &
 exit 0
