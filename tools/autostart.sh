@@ -56,14 +56,18 @@ fi
 
 # --worker: the detached half.
 #
-# Applies immediately rather than waiting for the compositor. Binding early is
-# what makes this cheap: if the binds are live before the compositor reads the
-# QML, it loads the modded copy on its own and no restart is needed at all.
+# Order matters here and is measured, not guessed: the compositor starts about
+# two seconds after this worker. boot-bind mounts the previous boot's verified
+# set in well under a second, so the compositor reads the modded QML on its
+# first start. The full apply that follows then finds the set unchanged and
+# the compositor already showing it, and makes no restart - which is the
+# difference between a clean boot and a fifteen-second black screen.
 if [ "$1" = "--worker" ]; then
-  log "worker started, applying"
+  bb=$("$CLI" boot-bind 2>&1)
+  log "boot-bind: $(echo "$bb" | tr -d '\n' | cut -c1-200)"
   out=$("$CLI" apply 2>&1)
   case "$out" in
-    *'"ok":true'*) log "apply ok" ;;
+    *'"ok":true'*) log "apply ok"; "$CLI" boot-ok >/dev/null 2>&1 ;;
     *)             log "apply failed: $(echo "$out" | tr -d '\n' | cut -c1-300)" ;;
   esac
   exit 0
