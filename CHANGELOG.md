@@ -5,6 +5,41 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.0] - 2026-09-14
+
+### Changed
+
+- The compositor no longer gets its QML from a bind mount over `/usr`. A full
+  shadow copy of the `WebOSCompositor` module lives in `/var/lib/lumaglass/qml`
+  with the modded file swapped in, and `QML2_IMPORT_PATH` points at it through
+  `/var/systemd/system/env/surface-manager.env`, an optional environment file
+  the compositor's own unit already reads. The compositor therefore starts on
+  the modded QML at boot+2s. Only Home's assets are still bound
+
+### Fixed
+
+- Cold boot no longer shows stock Home for ~25s before the mod appears, and no
+  longer restarts the compositor. A restart was previously unavoidable: the
+  compositor reads QML once at startup, it starts at boot+2s, and Homebrew
+  Channel's hooks cannot run before boot+20s
+- Power-off is immediate again. A compositor restart makes LG's igallery
+  preview segfault in `QFontDatabase::removeAllApplicationFonts` - reproducible
+  on stock firmware with no mod present - and faultmanager then reports the
+  crash with recovery `rebootToSuspend`, so tvpowerd answered the next power
+  press with a full reboot into standby instead of switching off. Not
+  restarting the compositor avoids the crash; when an interactive apply does
+  have to restart it, the reports that restart produces are removed
+
+### Added
+
+- `boot-bind` rebuilds the shadow module when the stock one changes, so a
+  firmware update cannot leave stale QML bound to new libraries, and drops the
+  environment override entirely if the rebuild fails or if it finds no
+  compositor running - a persistent override could otherwise repeat a failure
+  on every boot
+- `status` reports `live`, whether the running compositor actually has the mod,
+  separately from `applied`
+
 ## [0.2.4] - 2026-09-14
 
 ### Fixed
