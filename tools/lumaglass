@@ -396,10 +396,17 @@ staged_hash() {
 }
 
 stock_module_fp() {
-  # Identity of the stock module as installed: every file's size and mtime.
-  # Content hashing 2MB on every boot is not worth it; a firmware update
-  # rewrites the whole tree, and that shows up in this list.
-  find "$STOCK_QML_MODULE" -type f -printf '%P %s %T@\n' 2>/dev/null | sort | md5sum | cut -c1-32
+  # Identity of the stock module as installed: the recursive listing, which
+  # carries every file's name, size and mtime. A firmware update rewrites the
+  # tree and that shows up here, so there is no need to hash 2.8MB of content
+  # on every boot.
+  #
+  # Not `find -printf`: this is busybox 1.35 find, which does not have it, and
+  # the failure was silent - the pipeline hashed empty input, so every
+  # fingerprint compared equal to every other and the staleness check could
+  # never fire. Verified: `ls -lnR` is stable across calls (412 lines here)
+  # and differs as soon as any file's size changes.
+  ls -lnR "$STOCK_QML_MODULE" 2>/dev/null | md5sum | cut -c1-32
 }
 
 build_shadow() {

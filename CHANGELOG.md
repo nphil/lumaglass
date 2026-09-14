@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.1] - 2026-09-14
+
+### Fixed
+
+- The firmware-staleness guard never fired. `stock_module_fp` used
+  `find -printf`, which busybox 1.35 does not implement, and the failure was
+  silent: the pipeline hashed empty input, so every fingerprint compared equal
+  to every other and a replaced compositor module would have gone unnoticed.
+  It now fingerprints the recursive listing
+
 ## [0.3.0] - 2026-09-14
 
 ### Changed
