@@ -5,6 +5,22 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- Home's app-edit page (long-press on an app) no longer shows through the
+  widgets: the news photo sat over the app tiles and the clock over the
+  header. Widgets are now composited only into Home's scaffold pixels, so
+  anything Home draws itself - tiles, focus rings, popups - is always on
+  top of them. While the edit page is up they are dropped altogether and
+  the wallpaper becomes a dim blur, leaving only LG's page. Home gives no
+  signal for that page, so it is detected on the GPU from the flat header
+  panel it paints, in the same frame.
+- `apply` restarts the compositor when the QML or wallpaper changed. It
+  only restarted a compositor that lacked the shadow module, so a set with
+  the mod already live kept running the previous QML until the next boot.
+
 ## [0.3.6] - 2026-09-14
 
 ### Changed

@@ -223,6 +223,41 @@ FocusScope {
         live: true
         hideSource: root.homeKeyOn
     }
+    // Home gives no signal when it enters app-edit mode (the popup layer is internal to
+    // its Flutter tree), so it is read off the surface itself: the edit page paints one
+    // flat dark header panel where normal Home is pure scaffold black. Six taps across
+    // that band must all be non-black, dark and identical. Rendered as a 1x1 texture so
+    // the fullscreen passes read one texel instead of re-sampling six per fragment, and
+    // nothing ever comes back to the CPU - the answer lands in the same frame Home
+    // paints the page. Any other full-screen scrim Home draws trips it too, which is
+    // the wanted result.
+    ShaderEffect {
+        id: editProbe
+        width: 1; height: 1
+        visible: false
+        property variant src: homeSurfSrc
+        fragmentShader: "
+            uniform sampler2D src;
+            uniform lowp float qt_Opacity;
+            void main() {
+                highp vec3 a = texture2D(src, vec2(0.1146, 0.0833)).rgb;   // 220,90 @1080p
+                highp vec3 b = texture2D(src, vec2(0.1146, 0.1759)).rgb;   // 220,190
+                highp vec3 c = texture2D(src, vec2(0.2604, 0.1389)).rgb;   // 500,150
+                highp vec3 d = texture2D(src, vec2(0.5208, 0.1759)).rgb;   // 1000,190
+                highp vec3 e = texture2D(src, vec2(0.7552, 0.0833)).rgb;   // 1450,90
+                highp vec3 f = texture2D(src, vec2(0.8854, 0.1759)).rgb;   // 1700,190
+                highp vec3 dv = max(max(abs(b - a), abs(c - a)), max(max(abs(d - a), abs(e - a)), abs(f - a)));
+                highp float uniform_ = step(max(dv.r, max(dv.g, dv.b)), 0.012);
+                highp float nonBlack = step(0.02, max(a.r, max(a.g, a.b)));
+                highp float dark = step(dot(a, vec3(0.299, 0.587, 0.114)), 0.45);
+                gl_FragColor = vec4(uniform_ * nonBlack * dark, 0.0, 0.0, 1.0);
+            }"
+    }
+    ShaderEffectSource { id: editProbeSrc; sourceItem: editProbe; visible: false; live: true }
+    // The widget layer is composited by homeKey, and only into scaffold pixels, so
+    // nothing Home draws itself - icons, focus rings, its edit page - can end up under a
+    // widget.
+    ShaderEffectSource { id: homeWidgetsSrc; sourceItem: homeWidgets; anchors.fill: parent; visible: false; live: true; hideSource: true }
     // =================== custom widget layer (glass cards) ===================
     Item {
         id: homeWidgets
@@ -783,6 +818,10 @@ lowp float isW(highp vec2 uv) { lowp vec4 s = texture2D(src, uv); return step(0.
         property variant src: homeSurfSrc
         property variant wall: glassBakeSrc
         property variant wallb: homeWallBlurSrc
+        property variant probe: editProbeSrc
+        property variant widgets: homeWidgetsSrc
+        // Backdrop while Home's edit page is up: the blurred wallpaper, this dark.
+        property real editDim: 0.22
         // live glass regions (px): dock band + rail pill. Adjustable at runtime.
         property rect dockRect: Qt.rect(-80, 812, 2080, 200)
         property rect railRect: Qt.rect(26, 42, 104, 360)
@@ -836,6 +875,9 @@ lowp float isW(highp vec2 uv) { lowp vec4 s = texture2D(src, uv); return step(0.
             uniform highp float cardR;
             uniform highp float cardBAmt;
             uniform highp float aspect;
+            uniform sampler2D probe;
+            uniform sampler2D widgets;
+            uniform highp float editDim;
             lowp float isW(highp vec2 uv) { lowp vec4 s = texture2D(src, uv); return step(0.995, min(s.r, min(s.g, s.b))) * step(0.5, s.a); }
             // signed distance to a rounded rect, in height-normalised units (aspect-corrected); negative = inside
             highp float sdRR(highp vec2 uv, highp vec4 r, highp float rad) {
@@ -903,10 +945,13 @@ lowp float isW(highp vec2 uv) { lowp vec4 s = texture2D(src, uv); return step(0.
             }
             void main() {
                 lowp vec4 c = texture2D(src, qt_TexCoord0);
-                lowp vec4 w = texture2D(wall, qt_TexCoord0);                 // pre-baked wallpaper + static glass
+                lowp float edit = texture2D(probe, vec2(0.5)).r;
+                lowp vec4 w;
+                if (edit > 0.5) w = vec4(texture2D(wallb, qt_TexCoord0).rgb * editDim, 1.0);  // edit page: dim blurred backdrop, no glass
+                else            w = texture2D(wall, qt_TexCoord0);                             // pre-baked wallpaper + static glass
                 lowp float isBlack = step(max(c.r, max(c.g, c.b)), 0.003) * step(0.5, c.a);
                 lowp vec4 col = mix(c, w, isBlack);
-                lowp float inRail = step(qt_TexCoord0.x, 0.082) * step(qt_TexCoord0.y, 0.42);
+                lowp float inRail = step(qt_TexCoord0.x, 0.082) * step(qt_TexCoord0.y, 0.42) * (1.0 - edit);
                 if (inRail > 0.5) {
                     highp float hn = fract(sin(dot(gl_FragCoord.xy, vec2(12.9898, 78.233))) * 43758.5453);
                     highp float sat = max(c.r, max(c.g, c.b)) - min(c.r, min(c.g, c.b));
@@ -948,6 +993,9 @@ lowp float isW(highp vec2 uv) { lowp vec4 s = texture2D(src, uv); return step(0.
                         }
                     }
                 }
+                // widgets go under everything Home draws, and away entirely on the edit page
+                lowp vec4 wd = texture2D(widgets, qt_TexCoord0) * (isBlack * (1.0 - edit));
+                col.rgb = col.rgb * (1.0 - wd.a) + wd.rgb;
                 gl_FragColor = col * qt_Opacity;
             }"
     }

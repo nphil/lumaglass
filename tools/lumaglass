@@ -780,10 +780,17 @@ verb_apply() {
   fps_now=$(cfg_get_bool fps); [ -n "$fps_now" ] || fps_now=false
   stage_compositor "$fps_now" "$COMPOSITOR_STAGE.next"
 
-  changed=1
+  # What the compositor reads (QML, wallpaper) is tracked apart from the rest
+  # of the set: a running compositor that already has the shadow only needs a
+  # restart when one of those two actually changed, and nothing else in the
+  # set can be reached with a restart alone.
+  compositor_changed=1
   if [ "$(md5sum < "$COMPOSITOR_STAGE.next" 2>/dev/null)" = "$(md5sum < "$COMPOSITOR_STAGE" 2>/dev/null)" ] \
-     && [ "$(md5sum < "$WALL_SRC" 2>/dev/null)" = "$(md5sum < "$WALLPAPER_STAGE" 2>/dev/null)" ] \
-     && all_binds_live && shadow_current && env_live; then
+     && [ "$(md5sum < "$WALL_SRC" 2>/dev/null)" = "$(md5sum < "$WALLPAPER_STAGE" 2>/dev/null)" ]; then
+    compositor_changed=0
+  fi
+  changed=1
+  if [ "$compositor_changed" -eq 0 ] && all_binds_live && shadow_current && env_live; then
     changed=0
     rm -f "$COMPOSITOR_STAGE.next"
     log_line "apply: staged set unchanged, shadow current, assets bound, not remounting"
@@ -846,9 +853,12 @@ verb_apply() {
   # a modded Home layout. A restart while the panel is dark is invisible;
   # never restarting is not. restart_surface cleans up the crash reports the
   # restart provokes, which is what keeps power-off immediate.
+  # A compositor that started with the shadow but before this apply rebuilt
+  # it is still running the previous QML; the shadow on disk says nothing
+  # about what the running process loaded.
   restart_needed=0
-  if surface_start_uptime >/dev/null 2>&1 && ! compositor_has_shadow; then
-    restart_needed=1
+  if surface_start_uptime >/dev/null 2>&1; then
+    if ! compositor_has_shadow || [ "$compositor_changed" -eq 1 ]; then restart_needed=1; fi
   fi
 
   if [ "$restart_needed" -eq 1 ]; then
