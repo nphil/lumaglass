@@ -247,6 +247,20 @@ FocusScope {
         property int clockCol: 4;  property int clockSpan: 4;  property int clockRows: (clockStyle === "analog") ? 2 : 1
         property int wxCol: 9;     property int wxSpan: 3;     property int wxRows: 4
         property string wxIcons: "/usr/palm/applications/com.webos.app.home/data/flutter_assets/packages/elutter/lib/widgets/weather/assets/"
+        // ---- news card: bottom-left, bottom-anchored above the dock (not on the grid's top rows) ----
+        property int  newsCol: 0;  property int newsSpan: 6;  property int newsRows: 2
+        property real newsDockGap: 28
+        property int  newsSlideMs: 10000
+        property int  newsRefreshMs: 900000
+        property int  newsPerFeed: 4
+        // Keyless public RSS: no account, no quota, and no API key to leak in a published widget.
+        property var newsFeeds: [{ tag: "WORLD", src: "BBC News", url: "https://feeds.bbci.co.uk/news/world/rss.xml" },
+                                 { tag: "U.S.",  src: "BBC News", url: "https://feeds.bbci.co.uk/news/world/us_and_canada/rss.xml" }]
+        // Used only when the primary feeds return nothing; NYT carries longer summaries but larger images.
+        property var newsFeedsAlt: [{ tag: "WORLD", src: "The New York Times", url: "https://rss.nytimes.com/services/xml/rss/nyt/World.xml" },
+                                    { tag: "U.S.",  src: "The New York Times", url: "https://rss.nytimes.com/services/xml/rss/nyt/US.xml" }]
+        property var newsItems: []
+        property int newsIndex: 0
 
         function pad(n) { return (n < 10 ? "0" : "") + n }
         function fmtTime(d) {
@@ -306,10 +320,113 @@ FocusScope {
             }
             z.open("GET", "https://api.zippopotam.us/us/" + zip); z.send()
         }
+        // ---------- news ----------
+        function newsDecode(s) {
+            return s.replace(/<!\[CDATA\[/g, "").replace(/\]\]>/g, "").replace(/<[^>]+>/g, "")
+                    .replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, "\"")
+                    .replace(/&#0?39;/g, "'").replace(/&apos;/g, "'").replace(/&nbsp;/g, " ")
+                    .replace(/&amp;/g, "&").replace(/\s+/g, " ").trim()
+        }
+        function newsField(block, tag) {
+            var m = new RegExp("<" + tag + "[^>]*>([\\s\\S]*?)<\\/" + tag + ">").exec(block)
+            return m ? newsDecode(m[1]) : ""
+        }
+        function newsImage(block) {
+            // Prefer the largest asset that is not wasteful to pull every slide. Some feeds publish
+            // exactly one, oversized image (NYT ships a single 1800px square), so fall back to the
+            // smallest of the oversized ones rather than showing no picture at all.
+            var re = /<media:(?:content|thumbnail)([^>]*)>/g, m
+            var best = "", bw = -1, over = "", ow = 0
+            while ((m = re.exec(block)) !== null) {
+                var u = /url="([^"]+)"/.exec(m[1]); if (!u) continue
+                var w = /width="([0-9]+)"/.exec(m[1]), ww = w ? parseInt(w[1], 10) : 0
+                if (ww <= 1200) { if (ww > bw) { bw = ww; best = u[1] } }
+                else if (ow === 0 || ww < ow) { ow = ww; over = u[1] }
+            }
+            if (!best) best = over
+            // BBC's ichef serves any width from the same path; the feed's 240px default is too soft here
+            return best.replace(/\/standard\/[0-9]+\//, "/standard/480/")
+        }
+        function newsAgo(pub) {
+            var t = Date.parse(pub); if (isNaN(t)) return ""
+            var m = Math.round((Date.now() - t) / 60000)
+            if (m < 1) return "now"
+            if (m < 60) return m + "m ago"
+            if (m < 1440) return Math.round(m / 60) + "h ago"
+            return Math.round(m / 1440) + "d ago"
+        }
+        function newsParse(xml, feed) {
+            var out = [], re = /<item>([\s\S]*?)<\/item>/g, m
+            while ((m = re.exec(xml)) !== null && out.length < newsPerFeed) {
+                var b = m[1], title = newsField(b, "title")
+                if (!title) continue
+                out.push({ tag: feed.tag, src: feed.src, title: title, body: newsField(b, "description"),
+                           img: newsImage(b), ago: newsAgo(newsField(b, "pubDate")) })
+            }
+            return out
+        }
+        function newsMerge(buckets) {
+            // Alternate world / US down the lists so the rotation never shows two of one region in
+            // a row. The regional feeds overlap - a US story is usually in both - so drop repeats by
+            // headline; feed order decides the badge, which is why world is listed first.
+            var out = [], seen = {}, i = 0, more = true
+            while (more) {
+                more = false
+                for (var b = 0; b < buckets.length; b++) {
+                    var l = buckets[b] || []
+                    if (i >= l.length) continue
+                    more = true
+                    var k = l[i].title.toLowerCase()
+                    if (seen[k]) continue
+                    seen[k] = true
+                    out.push(l[i])
+                }
+                i++
+            }
+            return out
+        }
+        function newsLoad(feeds, onEmpty) {
+            var buckets = [], pending = feeds.length
+            for (var i = 0; i < feeds.length; i++) {
+                (function(k) {
+                    var x = new XMLHttpRequest()
+                    x.onreadystatechange = function() {
+                        if (x.readyState !== 4) return
+                        try { buckets[k] = (x.status === 200) ? homeWidgets.newsParse(x.responseText, feeds[k]) : [] }
+                        catch (e) { buckets[k] = []; console.warn("[homeWidgets] news parse failed: " + e) }
+                        if (--pending > 0) return
+                        var merged = homeWidgets.newsMerge(buckets)
+                        // keep the previous slides rather than blanking the card on a failed refresh
+                        if (!merged.length) { if (onEmpty) onEmpty(); return }
+                        homeWidgets.newsItems = merged
+                        if (homeWidgets.newsIndex >= merged.length) homeWidgets.newsIndex = 0
+                        homeWidgets.newsApply(homeWidgets.newsIndex)
+                        newsCard.visible = true
+                    }
+                    x.open("GET", feeds[k].url); x.send()
+                })(i)
+            }
+        }
+        function fetchNews() { newsLoad(newsFeeds, function() { homeWidgets.newsLoad(homeWidgets.newsFeedsAlt, null) }) }
+        function newsApply(i) {
+            var n = newsItems[i]; if (!n) return
+            newsTag.text = n.tag
+            newsMeta.text = n.src + (n.ago ? "  \u00b7  " + n.ago : "")
+            newsTitle.text = n.title
+            newsBodyText.text = n.body
+            newsImg.source = n.img ? n.img : ""
+        }
+        function newsAdvance() {
+            if (newsItems.length < 2) return
+            newsIndex = (newsIndex + 1) % newsItems.length
+            newsFade.restart()
+        }
         Timer { interval: 1000; running: homeWidgets.visible; repeat: true; triggeredOnStart: true
             onTriggered: { var d = new Date(); clockText.text = homeWidgets.fmtTime(d); ampmText.text = homeWidgets.twelveHour ? (d.getHours() < 12 ? "AM" : "PM") : ""
                            dateText.text = Qt.formatDate(d, "dddd, MMMM d"); greetText.text = homeWidgets.greet(d) } }
         Timer { interval: 900000; running: homeWidgets.visible; repeat: true; triggeredOnStart: true; onTriggered: homeWidgets.fetchWeather() }
+        Timer { interval: homeWidgets.newsSlideMs; running: homeWidgets.visible && homeWidgets.newsItems.length > 1; repeat: true; onTriggered: homeWidgets.newsAdvance() }
+        Timer { interval: homeWidgets.newsRefreshMs; running: homeWidgets.visible; repeat: true; triggeredOnStart: true; onTriggered: homeWidgets.fetchNews() }
 
         // ---------- debug: compositor FPS (LG's own frame-swap counter) ----------
         property bool debugFps: true
@@ -409,6 +526,118 @@ FocusScope {
                 }
             }
         }
+
+        // ---------- news card (bottom-left, sits above the dock band) ----------
+        Item {
+            id: newsCard
+            visible: false
+            x: homeWidgets.gx(homeWidgets.newsCol)
+            width: homeWidgets.gw(homeWidgets.newsSpan)
+            height: homeWidgets.gh(homeWidgets.newsRows)
+            y: homeKey.dockRect.y - homeWidgets.newsDockGap - height
+            property real pad: 28
+            property real imgW: Math.round(width * 0.34)
+            property bool hasImg: newsImg.status === Image.Ready
+            property real textX: pad + (hasImg ? imgW + 24 : 0)
+            // glass background is rendered by the compositor shader (cardC); content only here
+
+            SequentialAnimation {
+                id: newsFade
+                NumberAnimation { target: newsBody; property: "opacity"; to: 0; duration: 220; easing.type: Easing.InQuad }
+                ScriptAction { script: homeWidgets.newsApply(homeWidgets.newsIndex) }
+                NumberAnimation { target: newsBody; property: "opacity"; to: 1; duration: 320; easing.type: Easing.OutQuad }
+            }
+
+            Item {
+                id: newsBody
+                anchors.fill: parent
+
+                Item {
+                    // photo, cropped to the card's proportions and rounded to match the glass corners
+                    x: newsCard.pad; y: newsCard.pad
+                    width: newsCard.imgW; height: newsCard.height - 2 * newsCard.pad
+                    visible: newsCard.hasImg
+                    layer.enabled: true
+                    layer.effect: OpacityMask {
+                        maskSource: Rectangle { width: newsCard.imgW; height: newsCard.height - 2 * newsCard.pad; radius: 16 }
+                    }
+                    Image {
+                        id: newsImg
+                        anchors.fill: parent
+                        fillMode: Image.PreserveAspectCrop
+                        smooth: true; mipmap: true; asynchronous: true; cache: true
+                    }
+                }
+
+                Column {
+                    // centred, and the block shrinks to its content, so a one-sentence summary
+                    // reads as deliberate rather than leaving the lower half of the card empty
+                    id: newsText
+                    x: newsCard.textX
+                    width: newsCard.width - newsCard.textX - newsCard.pad
+                    anchors.verticalCenter: parent.verticalCenter
+                    spacing: 14
+                    Row {
+                        id: newsHead
+                        spacing: 12
+                        Rectangle {
+                            width: newsTag.implicitWidth + 20; height: 25; radius: 6
+                            color: newsTag.text === "U.S." ? "#40eb6f92" : "#40c4a7e7"
+                            border.width: 1
+                            border.color: newsTag.text === "U.S." ? "#80eb6f92" : "#80c4a7e7"
+                            Text {
+                                id: newsTag
+                                anchors.centerIn: parent
+                                color: "#e8e4f4"; font.family: "LG Smart UI"; renderType: Text.NativeRendering
+                                font.pixelSize: 14; font.letterSpacing: 1.2
+                            }
+                        }
+                        Text {
+                            id: newsMeta
+                            anchors.verticalCenter: parent.verticalCenter
+                            color: "#d4c4f0"; opacity: 0.8
+                            font.family: "LG Smart UI"; renderType: Text.NativeRendering; font.pixelSize: 16
+                        }
+                    }
+                    Text {
+                        id: newsTitle
+                        width: parent.width
+                        color: "#e8e4f4"; font.family: "LG Smart UI"; renderType: Text.NativeRendering
+                        font.pixelSize: 28; font.weight: Font.DemiBold; lineHeight: 1.15
+                        wrapMode: Text.WordWrap; maximumLineCount: 3; elide: Text.ElideRight
+                        style: Text.Raised; styleColor: "#50000000"
+                    }
+                    Text {
+                        id: newsBodyText
+                        width: parent.width
+                        // as much of the summary as the space the headline left over will hold
+                        property real avail: Math.max(0, newsCard.height - 2 * newsCard.pad
+                                                         - newsHead.height - newsTitle.height - 2 * newsText.spacing)
+                        maximumLineCount: Math.max(1, Math.floor(avail / 26))
+                        height: Math.min(implicitHeight, avail)
+                        color: "#cdc7e0"; opacity: 0.9
+                        font.family: "LG Smart UI"; renderType: Text.NativeRendering
+                        font.pixelSize: 20; lineHeight: 1.3
+                        wrapMode: Text.WordWrap; elide: Text.ElideRight
+                    }
+                }
+            }
+
+            Row {
+                // slide position; outside newsBody so it does not fade with the content
+                anchors.right: parent.right; anchors.rightMargin: newsCard.pad
+                anchors.bottom: parent.bottom; anchors.bottomMargin: newsCard.pad - 8
+                spacing: 7
+                Repeater {
+                    model: homeWidgets.newsItems.length
+                    delegate: Rectangle {
+                        width: 6; height: 6; radius: 3; color: "#e0def4"
+                        opacity: index === homeWidgets.newsIndex ? 0.95 : 0.26
+                        Behavior on opacity { NumberAnimation { duration: 250 } }
+                    }
+                }
+            }
+        }
     }
 
     // ===== static glass bake: wallpaper + dock + pill + cards, rendered ONCE (inputs never change per frame) =====
@@ -432,6 +661,8 @@ FocusScope {
         property vector4d cardBV: homeKey.cardBV
         property real cardR: homeKey.cardR
         property real cardBAmt: homeKey.cardBAmt
+        property vector4d cardCV: homeKey.cardCV
+        property real cardCAmt: homeKey.cardCAmt
         property variant src: homeWallSrc   // unused by the bake, keeps isW() compiling
         fragmentShader: "
             varying highp vec2 qt_TexCoord0;
@@ -453,6 +684,8 @@ FocusScope {
             uniform highp vec4 cardBV;
             uniform highp float cardR;
             uniform highp float cardBAmt;
+            uniform highp vec4 cardCV;
+            uniform highp float cardCAmt;
 lowp float isW(highp vec2 uv) { lowp vec4 s = texture2D(src, uv); return step(0.995, min(s.r, min(s.g, s.b))) * step(0.5, s.a); }
             // signed distance to a rounded rect, in height-normalised units (aspect-corrected); negative = inside
             highp float sdRR(highp vec2 uv, highp vec4 r, highp float rad) {
@@ -534,6 +767,9 @@ lowp float isW(highp vec2 uv) { lowp vec4 s = texture2D(src, uv); return step(0.
                 highp float dB = sdRR(qt_TexCoord0, cardBV, cardR);
                 lowp float gB = coverRR(qt_TexCoord0, cardBV, cardR) * cardBAmt;
                 if (gB > 0.001) w = mix(w, glassSample(qt_TexCoord0, cardBV, cardR, dB, hn), gB);
+                highp float dC = sdRR(qt_TexCoord0, cardCV, cardR);
+                lowp float gC = coverRR(qt_TexCoord0, cardCV, cardR) * cardCAmt;
+                if (gC > 0.001) w = mix(w, glassSample(qt_TexCoord0, cardCV, cardR, dC, hn), gC);
                 gl_FragColor = vec4(w.rgb, 1.0);
             }"
     }
@@ -571,6 +807,10 @@ lowp float isW(highp vec2 uv) { lowp vec4 s = texture2D(src, uv); return step(0.
         property vector4d cardBV: Qt.vector4d(cardB.x / width, cardB.y / height, cardB.width / width, cardB.height / height)
         property real cardR: cardRadius / height
         property real cardBAmt: cardBOn ? 1.0 : 0.0
+        property rect cardC: Qt.rect(newsCard.x, newsCard.y, newsCard.width, newsCard.height)
+        property bool cardCOn: newsCard.visible
+        property vector4d cardCV: Qt.vector4d(cardC.x / width, cardC.y / height, cardC.width / width, cardC.height / height)
+        property real cardCAmt: cardCOn ? 1.0 : 0.0
         property vector4d slotV: Qt.vector4d(slotX / width, slotY0 / height, slotPitch / height, slotHalf / height)
         property real aspect: width / height
         property real px: 1.0 / Math.max(1, width)

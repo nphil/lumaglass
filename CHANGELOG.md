@@ -5,6 +5,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- News card in the bottom-left corner: photo, headline and as much of the summary
+  as fits, rotating every 10 seconds. Top world and US stories come from keyless
+  public RSS (BBC News, falling back to The New York Times), so the widget ships
+  with no API key and no quota
+
 ## [0.1.0] - 2026-09-14
 
 ### Added
