@@ -3,8 +3,8 @@
 #
 # Verb map (each verb prints exactly one JSON object on stdout, exit 0/nonzero):
 #   status                 -> current measured state
-#   apply                  -> build+bind the mod, restart compositor, relaunch Home
-#   revert                 -> unbind everything, restore icon backups, back to stock
+#   apply                  -> stage the mod, point the compositor at it, relaunch Home
+#   revert                 -> drop the env override, unbind, restore icons, back to stock
 #   persist on|off         -> toggle the boot-hook symlink in webosbrew init.d
 #   fps on|off             -> toggle the compositor FPS debug overlay
 #   ntfy set <url>|off|test -> configure/test ntfy.sh notifications
@@ -46,8 +46,33 @@ BG_HD_SRC="$APPDIR/payload/wallpaper/bg_hd.png"
 BG_2K_SRC="$APPDIR/payload/wallpaper/bg_2k.png"
 BG_4K_SRC="$APPDIR/payload/wallpaper/bg_4k.png"
 
-QML_TARGET_1=/usr/lib/qml/WebOSCompositor/views/fullscreen/StarfishFullscreenContainer.qml
-QML_TARGET_2=/usr/lib/qt5/qml/WebOSCompositor/views/fullscreen/StarfishFullscreenContainer.qml
+# The compositor resolves QML modules through QML2_IMPORT_PATH, and its unit
+# reads an optional environment file from /var - which is writable and
+# persistent. So instead of bind-mounting our QML over the read-only module in
+# /usr, we keep a full shadow copy of the WebOSCompositor module with our file
+# swapped in, and point the import path at it. The compositor then loads the
+# modded QML at boot+2s when it first starts, which is the only way to avoid
+# restarting it: it reads QML exactly once, and no bind of ours can land
+# before it starts.
+#
+# This matters for more than the stock-Home flash. A compositor restart makes
+# LG's igallery preview segfault in QFontDatabase::removeAllApplicationFonts
+# (reproducible on stock firmware with no mod present), faultmanager records
+# the crash, and tvpowerd then answers the next power-off with a
+# reboot-to-suspend instead of an instant standby. Not restarting the
+# compositor is what keeps power-off immediate.
+STOCK_QML_MODULE=/usr/lib/qt5/qml/WebOSCompositor
+MODULE_RELPATH=views/fullscreen/StarfishFullscreenContainer.qml
+SHADOW_ROOT="$STATE/qml"
+SHADOW_MODULE="$SHADOW_ROOT/WebOSCompositor"
+SHADOW_QML="$SHADOW_MODULE/$MODULE_RELPATH"
+# Fingerprint of the stock module the shadow was built from. A firmware update
+# replaces the stock module; a shadow built from the old one would then feed
+# stale QML to new libraries, so the hook rebuilds whenever this stops
+# matching, and falls back to stock if it cannot.
+SHADOW_STOCK_FP="$STATE/.shadow-stock"
+ENV_DIR=/var/systemd/system/env
+ENV_FILE="$ENV_DIR/surface-manager.env"
 STOCK_ASSETS=/usr/palm/applications/com.webos.app.home/data/flutter_assets/assets
 
 HOME_PKILL_PATTERN="flutter-client -i com.webos.app.home"
@@ -108,9 +133,9 @@ is_mounted() {
 }
 
 count_mounts() {
+  # Only Home's assets are bound now; the compositor QML arrives through the
+  # import path, which is not a mount.
   n=0
-  is_mounted "$QML_TARGET_1" && n=$((n+1))
-  is_mounted "$QML_TARGET_2" && n=$((n+1))
   is_mounted "$STOCK_ASSETS" && n=$((n+1))
   echo "$n"
 }
@@ -189,12 +214,20 @@ wait_surface_active() {
 }
 
 restart_surface() {
+  # Restarting the compositor is now the exception, not the rule: the modded
+  # QML normally arrives through the import path when the compositor first
+  # starts. When a restart is genuinely unavoidable (an interactive apply
+  # while the panel is live), it makes LG stock apps segfault on teardown and
+  # arms tvpowerd's reboot-to-suspend, so snapshot the crash reports first and
+  # remove the ones this restart adds.
+  reports_before=$(snapshot_reports)
   systemctl restart "$SURFACE_SVC" >/dev/null 2>&1
   wait_surface_active || return 1
   # is-active goes true almost immediately (Type=notify), long before the
   # compositor can present a frame. Without this settle the subsequent Home
   # launch is accepted and then never composited, leaving a black screen.
   sleep "$SURFACE_SETTLE"
+  disarm_restart_crashes "$reports_before"
   return 0
 }
 
@@ -362,23 +395,89 @@ staged_hash() {
   cat "$COMPOSITOR_STAGE" "$WALLPAPER_STAGE" "$ASSETS/home.xml" "$ASSETS/i18n/en.json" 2>/dev/null | md5sum | cut -c1-32
 }
 
-resolve_qml_targets() {
-  # On this firmware /usr/lib/qt5/qml/WebOSCompositor is a symlink to
-  # /usr/lib/qml/WebOSCompositor, so both QML paths are the same inode and a
-  # second bind would just stack a redundant mount on the same mountpoint.
-  # Resolve and deduplicate, then bind each distinct target exactly once.
-  qml1=$(readlink -f "$QML_TARGET_1" 2>/dev/null); [ -n "$qml1" ] || qml1="$QML_TARGET_1"
-  qml2=$(readlink -f "$QML_TARGET_2" 2>/dev/null); [ -n "$qml2" ] || qml2="$QML_TARGET_2"
-  qml_targets="$qml1"
-  [ "$qml2" = "$qml1" ] || qml_targets="$qml1 $qml2"
+stock_module_fp() {
+  # Identity of the stock module as installed: every file's size and mtime.
+  # Content hashing 2MB on every boot is not worth it; a firmware update
+  # rewrites the whole tree, and that shows up in this list.
+  find "$STOCK_QML_MODULE" -type f -printf '%P %s %T@\n' 2>/dev/null | sort | md5sum | cut -c1-32
+}
+
+build_shadow() {
+  # Rebuild the shadow module from the stock one, swap our staged QML into
+  # it, and record which stock module it came from. Built next to the live
+  # copy and renamed into place so a compositor starting mid-build never
+  # sees a half-copied module.
+  [ -d "$STOCK_QML_MODULE" ] || return 1
+  [ -f "$COMPOSITOR_STAGE" ] || return 1
+  rm -rf "$SHADOW_ROOT.next" 2>/dev/null
+  mkdir -p "$SHADOW_ROOT.next" 2>/dev/null || return 1
+  cp -a "$STOCK_QML_MODULE" "$SHADOW_ROOT.next/" 2>/dev/null || { rm -rf "$SHADOW_ROOT.next"; return 1; }
+  cp -f "$COMPOSITOR_STAGE" "$SHADOW_ROOT.next/WebOSCompositor/$MODULE_RELPATH" 2>/dev/null || { rm -rf "$SHADOW_ROOT.next"; return 1; }
+  rm -rf "$SHADOW_ROOT.old" 2>/dev/null
+  [ -d "$SHADOW_ROOT" ] && mv "$SHADOW_ROOT" "$SHADOW_ROOT.old"
+  mv "$SHADOW_ROOT.next" "$SHADOW_ROOT" || { [ -d "$SHADOW_ROOT.old" ] && mv "$SHADOW_ROOT.old" "$SHADOW_ROOT"; return 1; }
+  rm -rf "$SHADOW_ROOT.old" 2>/dev/null
+  stock_module_fp > "$SHADOW_STOCK_FP"
+  return 0
+}
+
+shadow_current() {
+  # The shadow is usable if it carries exactly the staged QML and was built
+  # from the stock module that is installed right now.
+  [ -f "$SHADOW_QML" ] || return 1
+  [ "$(md5sum < "$SHADOW_QML" 2>/dev/null)" = "$(md5sum < "$COMPOSITOR_STAGE" 2>/dev/null)" ] || return 1
+  [ "$(cat "$SHADOW_STOCK_FP" 2>/dev/null)" = "$(stock_module_fp)" ] || return 1
+  return 0
+}
+
+env_line() { printf 'QML2_IMPORT_PATH=%s:/usr/lib/qt5/qml\n' "$SHADOW_ROOT"; }
+
+env_live() { [ "$(cat "$ENV_FILE" 2>/dev/null)" = "$(env_line)" ]; }
+
+write_env() {
+  mkdir -p "$ENV_DIR" 2>/dev/null || return 1
+  env_live && return 0
+  env_line > "$ENV_FILE.tmp.$$" && mv -f "$ENV_FILE.tmp.$$" "$ENV_FILE"
+}
+
+remove_env() { rm -f "$ENV_FILE" "$ENV_FILE.tmp."* 2>/dev/null; return 0; }
+
+compositor_has_shadow() {
+  # Whether the running compositor was started with our import path. Only its
+  # own environment says so; the env file on disk says what the NEXT one gets.
+  p=$(pgrep -x surface-manager 2>/dev/null | head -n1)
+  [ -n "$p" ] || return 1
+  tr '\0' '\n' < "/proc/$p/environ" 2>/dev/null | grep -qF "QML2_IMPORT_PATH=$SHADOW_ROOT:"
 }
 
 all_binds_live() {
-  resolve_qml_targets
-  for t in $qml_targets "$STOCK_ASSETS"; do
-    is_mounted "$t" || return 1
+  is_mounted "$STOCK_ASSETS"
+}
+
+snapshot_reports() {
+  # Names of crash reports present now, so the ones a compositor restart of
+  # ours creates can be told apart from anything that was already there.
+  ls -1 /tmp/var/log/reports/librdx 2>/dev/null | sort
+}
+
+disarm_restart_crashes() {
+  # $1 = snapshot_reports output taken before the restart.
+  #
+  # A compositor restart makes LG's igallery preview and one LunaExecutable
+  # segfault on teardown (reproducible on stock firmware; see the constants
+  # block). faultmanager treats any report in this directory as a crash fault
+  # with recovery "rebootToSuspend", and tvpowerd then reboots the set on
+  # the next power-off instead of going straight to standby. The reports are
+  # tmpfs and gone at the next boot anyway; removing only the ones this
+  # restart produced gives the power path back without hiding anything that
+  # was already recorded.
+  before="$1"
+  n=0
+  for f in $(ls -1 /tmp/var/log/reports/librdx 2>/dev/null | sort); do
+    printf '%s\n' "$before" | grep -qxF -- "$f" && continue
+    rm -f "/tmp/var/log/reports/librdx/$f" 2>/dev/null && n=$((n+1))
   done
-  return 0
+  log_line "disarmed $n crash report(s) produced by our compositor restart"
 }
 
 # ------------------------------------------------------------------- revert
@@ -389,10 +488,17 @@ do_revert_internal() {
   # compositor restart / Home relaunch is warranted.
   REVERT_CHANGED=0
 
-  for p in "$QML_TARGET_1" "$QML_TARGET_2" "$STOCK_ASSETS"; do
-    if is_mounted "$p"; then REVERT_CHANGED=1; fi
-    drain_umount "$p"
-  done
+  # The env file is what makes a starting compositor load our module, so it
+  # goes first: from that point on any compositor start is stock, whether or
+  # not the restart below succeeds.
+  if [ -f "$ENV_FILE" ]; then REVERT_CHANGED=1; fi
+  remove_env
+  if [ -d "$SHADOW_ROOT" ]; then REVERT_CHANGED=1; fi
+  rm -rf "$SHADOW_ROOT" "$SHADOW_ROOT.next" "$SHADOW_ROOT.old" 2>/dev/null
+  rm -f "$SHADOW_STOCK_FP" 2>/dev/null
+
+  if is_mounted "$STOCK_ASSETS"; then REVERT_CHANGED=1; fi
+  drain_umount "$STOCK_ASSETS"
 
   # Restore any icon appinfo.json backups generically: each backup's
   # destination path is recorded in a sidecar .origpath file so revert never
@@ -520,50 +626,49 @@ verb_apply() {
       && mv "$ASSETS/i18n/en.json.tmp.$$" "$ASSETS/i18n/en.json"
   fi
 
-  # 3. Stage what this apply would bind, then decide whether anything changed.
+  # 3. Stage the compositor QML this apply would use, then decide what changed.
   #
-  # Draining and re-binding an unchanged set is not harmless: while the binds
-  # are down a Home launch reads stock assets, and moving the bind timestamp
-  # forward would make the compositor look as if it had read stale content and
-  # earn it a restart it does not need. So a set that is byte-identical to
-  # what is already live is left exactly as it is.
+  # The compositor picks our QML up through the import path (a shadow copy of
+  # its module), not a bind, so there is nothing to unmount for it. Home still
+  # reads its layout from a bound assets directory. A byte-identical set that
+  # is already live and already served by a shadow-aware compositor is left
+  # untouched, so a no-op apply neither remounts nor restarts anything.
   fps_now=$(cfg_get_bool fps); [ -n "$fps_now" ] || fps_now=false
   stage_compositor "$fps_now" "$COMPOSITOR_STAGE.next"
 
   changed=1
   if [ "$(md5sum < "$COMPOSITOR_STAGE.next" 2>/dev/null)" = "$(md5sum < "$COMPOSITOR_STAGE" 2>/dev/null)" ] \
      && [ "$(md5sum < "$WALL_SRC" 2>/dev/null)" = "$(md5sum < "$WALLPAPER_STAGE" 2>/dev/null)" ] \
-     && all_binds_live; then
+     && all_binds_live && shadow_current && env_live; then
     changed=0
     rm -f "$COMPOSITOR_STAGE.next"
-    log_line "apply: staged set unchanged and every bind live, not remounting"
+    log_line "apply: staged set unchanged, shadow current, assets bound, not remounting"
   fi
 
   if [ "$changed" -eq 1 ]; then
-    # Drain any existing binds BEFORE replacing the stage. The staged QML is
-    # the source of a live bind after a previous apply, and replacing a bind
-    # source in place fails with EBUSY, so unmounting has to come first.
-    drain_umount "$QML_TARGET_1"
-    drain_umount "$QML_TARGET_2"
-    drain_umount "$STOCK_ASSETS"
-
-    # 4. Stage the persistent wallpaper copy and the compositor QML working copy.
     cp -f "$WALL_SRC" "$WALLPAPER_STAGE" 2>/dev/null
     mv -f "$COMPOSITOR_STAGE.next" "$COMPOSITOR_STAGE"
 
-    # 5. Bind each distinct target exactly once.
-    resolve_qml_targets
-    for t in $qml_targets; do
-      binderr=$(mount --bind "$COMPOSITOR_STAGE" "$t" 2>&1 >/dev/null)
-      if [ $? -ne 0 ]; then
-        log_line "apply: bind failed on $t: $binderr"
-        do_revert_internal
-        ntfy_notify "LumaGlass apply failed: compositor bind failed"
-        emit_error "compositor bind failed: $binderr"
-        return 1
-      fi
-    done
+    # 4. Build the shadow compositor module and point the compositor's env
+    # file at it. This is what a freshly starting compositor reads; nothing
+    # is mounted for it.
+    if ! build_shadow; then
+      log_line "apply: could not build shadow compositor module"
+      do_revert_internal
+      ntfy_notify "LumaGlass apply failed: could not build compositor module"
+      emit_error "shadow module build failed"
+      return 1
+    fi
+    if ! write_env; then
+      log_line "apply: could not write compositor env file"
+      do_revert_internal
+      ntfy_notify "LumaGlass apply failed: could not write compositor env"
+      emit_error "compositor env write failed"
+      return 1
+    fi
 
+    # 5. Bind Home's assets (its layout, strings and banner images).
+    drain_umount "$STOCK_ASSETS"
     binderr=$(mount --bind "$ASSETS" "$STOCK_ASSETS" 2>&1 >/dev/null)
     if [ $? -ne 0 ]; then
       log_line "apply: bind failed on assets: $binderr"
@@ -572,59 +677,33 @@ verb_apply() {
       emit_error "assets bind failed: $binderr"
       return 1
     fi
-
-    # Every intended bind must be live before we touch the compositor.
-    for t in $qml_targets "$STOCK_ASSETS"; do
-      if ! is_mounted "$t"; then
-        log_line "apply: bind verification failed for $t"
-        do_revert_internal
-        ntfy_notify "LumaGlass apply failed: bind verification failed"
-        emit_error "bind verification failed for $t"
-        return 1
-      fi
-    done
+    if ! is_mounted "$STOCK_ASSETS"; then
+      log_line "apply: assets bind verification failed"
+      do_revert_internal
+      ntfy_notify "LumaGlass apply failed: bind verification failed"
+      emit_error "assets bind verification failed"
+      return 1
+    fi
     record_bound_now
   fi
 
-  # 6. Restart the compositor only if it needs it.
+  # 6. Bring the change on screen.
   #
-  # The compositor reads the QML once, at startup. If it started AFTER the
-  # content it is showing went live - a no-op re-apply, or a compositor that
-  # came up on its own after the binds - it already loaded the modded QML and
-  # a restart only blacks the screen for 15s for nothing. On a cold boot it
-  # never has: the compositor starts at boot+2s and Homebrew Channel's hooks
-  # run at boot+20s, so that path always takes exactly one restart.
-  bound_up=$(bound_at_uptime)
-  [ -n "$bound_up" ] || { record_bound_now; bound_up=$(bound_at_uptime); }
-
-  restart_needed=1
-  start_up=$(surface_start_uptime)
-  if [ -z "$start_up" ]; then
-    # The compositor is not running, so it will read the modded QML when it
-    # next starts.
-    restart_needed=0
-    log_line "apply: compositor not running, binds staged for its next start"
-  elif [ "$start_up" -ge "$bound_up" ] 2>/dev/null; then
-    restart_needed=0
-    log_line "apply: compositor started at boot+${start_up}s, after binds at boot+${bound_up}s, no restart needed"
-  elif ! panel_is_active; then
-    # Nothing is being presented, so the next natural compositor start will
-    # pick the binds up. Forcing one here races the power transition.
-    restart_needed=0
-    log_line "apply: panel not active, binds staged for next compositor start"
-  else
-    log_line "apply: compositor started at boot+${start_up}s, before binds at boot+${bound_up}s, restarting"
+  # The compositor only reads QML at startup, so the shadow reaches the screen
+  # when it next starts. On the boot path that is its very first start at
+  # boot+2s: the env file is already in place, so it comes up on the modded
+  # QML with no restart and no stock-Home flash. Interactively, the compositor
+  # is already running on stock QML and the panel is live, so it needs one
+  # restart to re-read - the one case where we pay for a restart, and where
+  # restart_surface cleans up the crash reports that restart provokes.
+  # Home is always relaunched so it re-reads the bound assets.
+  restart_needed=0
+  if surface_start_uptime >/dev/null 2>&1 && panel_is_active && ! compositor_has_shadow; then
+    restart_needed=1
   fi
 
-  # 7. Restart if needed, then verify no shader compile failure was logged by
-  # the compositor that read this content. The log spans boots and its early
-  # lines carry an unsynchronised clock, so the check is anchored on a line
-  # count taken just before our restart - never on a timestamp. A compositor
-  # we did not restart already passed this check in the apply that stamped
-  # the set as verified.
   if [ "$restart_needed" -eq 1 ]; then
     marker=$(wc -l < "$MSGLOG" 2>/dev/null | tr -d ' '); [ -n "$marker" ] || marker=0
-    record_bound_now
     if ! restart_surface; then
       log_line "apply: surface-manager-daemon did not come back active"
       do_revert_internal
@@ -632,6 +711,7 @@ verb_apply() {
       emit_error "compositor did not become active after restart"
       return 1
     fi
+    log_line "apply: compositor restarted to read shadow module"
     kill_home_app
     relaunch_home
     if sed -n "$((marker+1)),\$p" "$MSGLOG" 2>/dev/null | grep -qa 'shader compilation failed'; then
@@ -642,6 +722,11 @@ verb_apply() {
       emit_error "shader compilation failed; auto-reverted to stock"
       return 1
     fi
+  elif [ "$changed" -eq 1 ]; then
+    # Compositor already serves the shadow (or is not yet up); only Home needs
+    # to re-read the freshly bound assets.
+    kill_home_app
+    relaunch_home
   fi
   staged_hash > "$VERIFIED"
 
@@ -656,19 +741,19 @@ verb_apply() {
 # ---------------------------------------------------------------- boot-bind
 
 verb_boot_bind() {
-  # The boot hook's opening move: mount the previous boot's staged set in well
-  # under a second, before the ~5s a full apply spends staging.
+  # The boot hook's opening move. There is no longer a race to win for the
+  # compositor: the env file persists in /var, so the compositor that started
+  # at boot+2s already loaded the shadow module. What this does is bind Home's
+  # assets - a bind mount does not survive a reboot - and check the two things
+  # that can make a persistent env file dangerous.
   #
-  # On this firmware that does not avoid the boot restart. The compositor
-  # starts at boot+2s and Homebrew Channel's hooks run at boot+20s, so it has
-  # always read stock QML by the time anything of ours can run, and /etc is a
-  # read-only overlay with no way to order a unit ahead of it. What binding
-  # first buys is that the one restart happens as early as the hook allows,
-  # and that any compositor start after this point - a crash respawn, a power
-  # transition that recycles it - picks the modded QML up with no restart.
-  #
-  # It only ever binds a set that a full apply has already verified on this
-  # firmware, and it skips itself once after a boot that never reported ok.
+  # 1. A firmware update replaces the stock compositor module. Our shadow was
+  #    built from the old one, so it would feed stale QML to new libraries.
+  #    Rebuild it; if that fails, drop the env file so the set is stock.
+  # 2. Our QML could stop the compositor from starting at all. Unlike a bind,
+  #    a persistent env file would repeat that on every boot. If the hook runs
+  #    and no compositor is up, drop the env file and restart, which puts the
+  #    TV back on stock rather than leaving a black screen.
   if ! take_mutation_lock; then
     emit_error "another apply or revert is still running"
     return 1
@@ -691,21 +776,41 @@ verb_boot_bind() {
   fi
 
   touch "$BOOT_PENDING"
-  resolve_qml_targets
+
+  # Fail safe first: a compositor that never came up outranks everything else.
+  if [ -f "$ENV_FILE" ] && ! surface_start_uptime >/dev/null 2>&1; then
+    log_line "boot-bind: no compositor running with our env file present, reverting to stock"
+    remove_env
+    systemctl restart "$SURFACE_SVC" >/dev/null 2>&1
+    ntfy_notify "LumaGlass disabled itself: compositor did not start"
+    printf '{"ok":true,"bound":false,"reason":"compositor-absent"}\n'
+    return 0
+  fi
+
+  if ! shadow_current; then
+    log_line "boot-bind: shadow module stale against stock, rebuilding"
+    if build_shadow; then
+      log_line "boot-bind: shadow module rebuilt"
+    else
+      log_line "boot-bind: shadow rebuild failed, dropping env file"
+      remove_env
+      ntfy_notify "LumaGlass disabled itself: compositor module changed"
+      printf '{"ok":true,"bound":false,"reason":"stale-module"}\n'
+      return 0
+    fi
+  fi
+  write_env
+
   n=0
-  for t in $qml_targets; do
-    is_mounted "$t" && continue
-    mount --bind "$COMPOSITOR_STAGE" "$t" >/dev/null 2>&1 && n=$((n+1))
-  done
   if ! is_mounted "$STOCK_ASSETS"; then
     mount --bind "$ASSETS" "$STOCK_ASSETS" >/dev/null 2>&1 && n=$((n+1))
   fi
   if all_binds_live; then
     record_bound_now
-    log_line "boot-bind: $n bind(s) made, all live"
+    log_line "boot-bind: $n bind(s) made, assets live, compositor already on shadow=$(compositor_has_shadow && echo yes || echo no)"
     printf '{"ok":true,"bound":true,"mounts":%s}\n' "$(count_mounts)"
   else
-    log_line "boot-bind: binds incomplete after $n mount(s), leaving it to apply"
+    log_line "boot-bind: assets bind incomplete, leaving it to apply"
     printf '{"ok":true,"bound":false,"reason":"incomplete"}\n'
   fi
   return 0
@@ -724,15 +829,20 @@ verb_status() {
   ensure_config
   version=$(get_version); [ -n "$version" ] || version="0.0.0"
   mounts=$(count_mounts)
-  if [ "$mounts" -gt 0 ]; then applied=true; else applied=false; fi
+  # Applied means both halves are in place: Home's assets bound, and a
+  # starting compositor pointed at our module. Mount count alone stopped
+  # being the answer when the compositor moved off a bind onto the import
+  # path. "live" is whether the compositor running right now has it.
+  if [ "$mounts" -gt 0 ] && env_live && [ -d "$SHADOW_ROOT" ]; then applied=true; else applied=false; fi
+  if compositor_has_shadow; then live=true; else live=false; fi
   if [ -L "$AUTOSTART_LINK" ]; then persist=true; else persist=false; fi
   fps=$(cfg_get_bool fps); [ "$fps" = "true" ] && fps=true || fps=false
   ntfy_en=$(cfg_get_bool enabled); [ "$ntfy_en" = "true" ] && ntfy_en=true || ntfy_en=false
   ntfy_url_esc=$(json_escape "$(cfg_get_str url)")
   firmware_esc=$(json_escape "$(get_firmware)")
   model_esc=$(json_escape "$(get_model)")
-  printf '{"ok":true,"version":"%s","applied":%s,"mounts":%s,"persist":%s,"fps":%s,"ntfy":{"enabled":%s,"url":"%s"},"firmware":"%s","model":"%s"}\n' \
-    "$version" "$applied" "$mounts" "$persist" "$fps" "$ntfy_en" "$ntfy_url_esc" "$firmware_esc" "$model_esc"
+  printf '{"ok":true,"version":"%s","applied":%s,"live":%s,"mounts":%s,"persist":%s,"fps":%s,"ntfy":{"enabled":%s,"url":"%s"},"firmware":"%s","model":"%s"}\n' \
+    "$version" "$applied" "$live" "$mounts" "$persist" "$fps" "$ntfy_en" "$ntfy_url_esc" "$firmware_esc" "$model_esc"
   return 0
 }
 
