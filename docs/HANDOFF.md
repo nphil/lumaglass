@@ -228,11 +228,12 @@ touching.
 
 ## The other mod on this set
 
-tvweb (`nphil/lg-webos-mqtt`) bind-mounts its own adblock `/etc/hosts`. That
+Starfish (`nphil/starfish`, formerly `lg-webos-mqtt`; still installed on the
+set under `/var/lib/tvweb`) bind-mounts its own adblock `/etc/hosts`. That
 bind stacks on top of Homebrew Channel's, which is how Homebrew's OS-update
 block (four LG hosts pointed at loopback) was silently defeated: the TV found
 a 1.7 GB firmware update and put its NSU alert up at boot+34 s for 30 s on
-every boot. tvweb 0.34.3 carries those hosts whenever
+every boot. Starfish 0.34.3 carries those hosts whenever
 `/var/luna/preferences/webosbrew_block_updates` exists.
 
 tvweb used to offer QML screen saver replacements. They are gone as of tvweb
