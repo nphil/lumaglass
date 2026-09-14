@@ -8,16 +8,16 @@
       "sourceUrl": "https://github.com/nphil/lumaglass",
       "manifest": {
         "id": "org.nphil.lumaglass",
-        "version": "0.3.0",
+        "version": "0.3.1",
         "type": "web",
         "title": "LumaGlass",
         "appDescription": "Liquid glass home screen for rooted LG webOS TVs",
         "iconUri": "https://raw.githubusercontent.com/nphil/lumaglass/main/assets/icon160.png",
         "sourceUrl": "https://github.com/nphil/lumaglass",
         "rootRequired": true,
-        "ipkUrl": "https://github.com/nphil/lumaglass/releases/download/v0.3.0/org.nphil.lumaglass_0.3.0_all.ipk",
+        "ipkUrl": "https://github.com/nphil/lumaglass/releases/download/v0.3.1/org.nphil.lumaglass_0.3.1_all.ipk",
         "ipkHash": {
-          "sha256": "1ae3cd9524ea8edcbc96b81f62e3963c7b2c45b6253e08ee6800d3133b914a92"
+          "sha256": "9d0ef793a9d81852bcab3cced4a46afe39fd656fcf0f543b25be2452a7c52af9"
         }
       }
     }
