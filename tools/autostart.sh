@@ -19,8 +19,8 @@
 
 STATE=/var/lib/lumaglass
 LOG="$STATE/log"
-MAX_WAIT=90        # seconds to wait for the compositor to come up
-POLL=2
+# Per-boot, so it lives in tmpfs: the pid of whichever hook is applying.
+WORKER_MARK=/tmp/.lumaglass-worker
 
 # Resolve the real app dir even though we are invoked through a symlink
 # in /var/lib/webosbrew/init.d.
@@ -54,24 +54,50 @@ if ! grep -q '"persist"[[:space:]]*:[[:space:]]*true' "$STATE/config.json" 2>/de
   exit 0
 fi
 
-# --worker: the detached half.
+# --worker: the detached half, run by whichever hook got here first.
 #
-# boot-bind first, so the binds are live within a second of this hook; then
-# the full apply, which finds the compositor started before them (it comes up
-# at boot+2s, this hook at boot+20s) and makes the one restart a cold boot
-# needs, as early as the hook allows. Any later compositor start reads the
-# modded QML on its own.
+# boot-bind first, so the binds are live within a second; then the full apply,
+# which restarts the compositor because its first start at boot+2.6s cannot
+# see our EnvironmentFile - nothing writable is mounted on /var until
+# mount-readwrite.service at ~13s. The early hook (a PATH shim on
+# kdump.service, 14.2s) gets here about 19s before Homebrew Channel's
+# run-parts does, which is the whole difference between a boot that shows
+# stock Home and one that does not.
 if [ "$1" = "--worker" ]; then
+  # Claimed before any work, not after: the late hook fires while the early
+  # apply is still running, and a marker written only on success let it start
+  # a second apply that then took the "previous boot never completed"
+  # failsafe path, because boot-ok had not been written yet either.
+  echo $$ > "$WORKER_MARK" 2>/dev/null
   # Tells apply it is on the boot path: never force the panel on.
   LUMAGLASS_BOOT=1; export LUMAGLASS_BOOT
   bb=$("$CLI" boot-bind 2>&1)
   log "boot-bind: $(echo "$bb" | tr -d '\n' | cut -c1-200)"
   out=$("$CLI" apply 2>&1)
   case "$out" in
-    *'"ok":true'*) log "apply ok"; "$CLI" boot-ok >/dev/null 2>&1 ;;
-    *)             log "apply failed: $(echo "$out" | tr -d '\n' | cut -c1-300)" ;;
+    *'"ok":true'*)
+      log "apply ok"
+      "$CLI" boot-ok >/dev/null 2>&1
+      ;;
+    *)
+      log "apply failed: $(echo "$out" | tr -d '\n' | cut -c1-300)"
+      # Let run-parts still have its go: the net is the whole point of it.
+      rm -f "$WORKER_MARK" 2>/dev/null
+      ;;
   esac
   exit 0
+fi
+
+# A worker is already running or has already succeeded this boot, so
+# run-parts has nothing to do. A stale pid means that worker died without
+# finishing, and then the net should still run.
+if [ -f "$WORKER_MARK" ]; then
+  wpid=$(cat "$WORKER_MARK" 2>/dev/null)
+  if [ -n "$wpid" ] && { [ -d "/proc/$wpid" ] || [ ! -e "$STATE/.boot-pending" ]; }; then
+    log "early hook already handled this boot, nothing to do"
+    exit 0
+  fi
+  log "early worker $wpid is gone and the boot never completed, applying"
 fi
 
 # Everything below runs DETACHED, and that is the whole point.

@@ -5,6 +5,52 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.4] - 2026-09-14
+
+### Changed
+
+- The mod now reaches the screen at boot+33s instead of boot+55-60s, and the
+  boot no longer shows stock Home before switching. Two changes get there.
+
+  The apply used to run from Homebrew Channel's `init.d` run-parts at ~33s,
+  by which time Home has long since painted. It now triggers at ~12-14s from
+  a PATH shim in front of `grep` for `kdump.service`, which starts at 14.2s,
+  reads an `EnvironmentFile` under `/var`, and on a set without `crashkernel`
+  on the kernel command line is a no-op that exits 0. The shim always execs
+  the real grep, so it cannot stop that unit, and run-parts stays as the net
+  in case the early apply fails.
+
+  The restart path also slept 14s before asking for Home and 8s after.
+  Measured, asking for Home immediately still put pixels on the panel at
+  +12s, so both sleeps are gone. Readiness is now taken from the panel: a
+  captured frame is 835 bytes while it is still blank and over 79000 once
+  Home is composited, whereas the Home process, `NL_HOME_SHOWN` and
+  `getForegroundAppInfo` all go true about 8s before anything is drawn.
+
+  Restarting the compositor that early also provokes none of the stock-app
+  segfaults a later restart does, so there are no crash reports to disarm.
+
+### Fixed
+
+- The cause of the compositor's first start ignoring the override, withdrawn
+  as unexplained in 0.3.3, is that `/var` does not show the writable ext4
+  subtree until `mount-readwrite.service` relocates it at 12.96s.
+  `surface-manager-daemon` starts at 2.63s, so `/var/systemd/system/env` is
+  not a path that exists yet and the optional read is a silent no-op - the
+  file's atime is untouched across a boot, and LG's own env files for
+  `ls-hubd`, `configd`, `memchute`, `tvpowerd`, `bootd` and `sam` are equally
+  inert that early. One compositor restart per boot is therefore structural,
+  and 13s is the floor for anything this mod can do.
+
+  Baking the mod into the hibernation image the set resumes from
+  (`snapshot resume=/dev/mmcblk0p54`) was tried and does not work: the image
+  is captured at ~15s, before the 13s floor plus a compositor restart can
+  complete, so it always captures the stock compositor.
+
+- The late hook no longer applies a second time on top of the early one. It
+  stands down while an early worker is running or has succeeded, and only
+  takes over if that worker died with the boot still incomplete.
+
 ## [0.3.3] - 2026-09-14
 
 ### Fixed
