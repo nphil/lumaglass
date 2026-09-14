@@ -5,6 +5,29 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.2] - 2026-09-14
+
+### Changed
+
+- Cold boot no longer restarts the compositor. The compositor starts about two
+  seconds after Homebrew Channel's hooks, and a full apply spent ~5 s staging
+  before its binds landed, so it read stock QML and had to be restarted: a
+  fifteen-second black screen on every boot. The boot hook now binds the
+  previous boot's verified set first, in well under a second, so the compositor
+  loads the modded QML on its own first start
+- `apply` is idempotent. A staged set identical to what is already live is left
+  mounted rather than drained and re-bound, and the compositor is judged against
+  the time that content actually went live. A no-op apply now takes about a
+  second and makes no restart
+- `fps` goes through `apply`. The inline version bound both QML paths, which
+  are one inode, and stacked two mounts
+
+### Added
+
+- `boot-bind` and `boot-ok` verbs for the boot hook. `boot-bind` only mounts a
+  set that a full apply has verified on this firmware, and skips itself once
+  after a boot that never reported ok
+
 ## [0.2.1] - 2026-09-14
 
 ### Fixed

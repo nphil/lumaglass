@@ -25,6 +25,17 @@ BACKUP="$STATE/backup"
 STAMP="$STATE/.built-stamp"
 COMPOSITOR_STAGE="$STATE/compositor.qml"
 WALLPAPER_STAGE="$STATE/wall_1080.png"
+# Written by the last full apply that passed verification: a hash of the staged
+# set. boot-bind only fast-binds a set that carries this stamp.
+VERIFIED="$STATE/.verified"
+# Epoch at which the current staged content became live. Survives a re-apply
+# that changes nothing, so the compositor can be judged against the real time
+# the content it read was bound, not the time of the latest no-op apply.
+BOUND_AT="$STATE/.bound-at"
+# Present from boot-bind until the boot's apply reports ok. Found at the next
+# boot, it means the previous one never completed, and the fast path is skipped
+# once - the same shape as Homebrew Channel's own failsafe.
+BOOT_PENDING="$STATE/.boot-pending"
 
 APPINFO="$APPDIR/appinfo.json"
 QML_SRC="$APPDIR/payload/compositor/StarfishFullscreenContainer.qml"
@@ -301,13 +312,48 @@ get_model() {
 # ------------------------------------------------------------- QML staging
 
 stage_compositor() {
-  # $1 = fps (true|false). Always rebuilt from the pristine payload, so the
-  # payload itself is never touched and repeated calls are idempotent.
-  fps="$1"
+  # $1 = fps (true|false), $2 = output path (default: the live stage). Always
+  # rebuilt from the pristine payload, so the payload itself is never touched
+  # and repeated calls are idempotent.
+  fps="$1"; out="${2:-$COMPOSITOR_STAGE}"
   mkdir -p "$STATE" 2>/dev/null
   sed -e "s#file:///tmp/hx/wall_1080\\.png#file://$WALLPAPER_STAGE#" \
       -e "s/property bool debugFps: true/property bool debugFps: $fps/" \
-      "$QML_SRC" > "$COMPOSITOR_STAGE.tmp.$$" && mv "$COMPOSITOR_STAGE.tmp.$$" "$COMPOSITOR_STAGE"
+      "$QML_SRC" > "$out.tmp.$$" && mv "$out.tmp.$$" "$out"
+}
+
+staged_hash() {
+  # Identity of the whole staged set: everything a bind exposes to the
+  # compositor and to Home.
+  cat "$COMPOSITOR_STAGE" "$WALLPAPER_STAGE" "$ASSETS/home.xml" "$ASSETS/i18n/en.json" 2>/dev/null | md5sum | cut -c1-32
+}
+
+resolve_qml_targets() {
+  # On this firmware /usr/lib/qt5/qml/WebOSCompositor is a symlink to
+  # /usr/lib/qml/WebOSCompositor, so both QML paths are the same inode and a
+  # second bind would just stack a redundant mount on the same mountpoint.
+  # Resolve and deduplicate, then bind each distinct target exactly once.
+  qml1=$(readlink -f "$QML_TARGET_1" 2>/dev/null); [ -n "$qml1" ] || qml1="$QML_TARGET_1"
+  qml2=$(readlink -f "$QML_TARGET_2" 2>/dev/null); [ -n "$qml2" ] || qml2="$QML_TARGET_2"
+  qml_targets="$qml1"
+  [ "$qml2" = "$qml1" ] || qml_targets="$qml1 $qml2"
+}
+
+all_binds_live() {
+  resolve_qml_targets
+  for t in $qml_targets "$STOCK_ASSETS"; do
+    is_mounted "$t" || return 1
+  done
+  return 0
+}
+
+shader_failed_since() {
+  # $1 = epoch. /var/log/messages spans boots and its lines start with an ISO
+  # UTC timestamp, so a lexical compare on the first field selects everything
+  # logged at or after that instant.
+  since=$(date -u -d "@$1" '+%Y-%m-%dT%H:%M:%S' 2>/dev/null)
+  [ -n "$since" ] && [ -r "$MSGLOG" ] || return 1
+  awk -v b="$since" '$1 >= b' "$MSGLOG" 2>/dev/null | grep -qa 'shader compilation failed'
 }
 
 # ------------------------------------------------------------------- revert
@@ -341,6 +387,10 @@ do_revert_internal() {
       fi
     done
   fi
+
+  # Nothing of ours is live any more, so the next apply must not inherit the
+  # old bind time and skip a restart the compositor genuinely needs.
+  rm -f "$BOUND_AT" "$BOOT_PENDING"
 
   if [ "$REVERT_CHANGED" -eq 1 ]; then
     restart_surface >/dev/null 2>&1
@@ -445,68 +495,81 @@ verb_apply() {
       && mv "$ASSETS/i18n/en.json.tmp.$$" "$ASSETS/i18n/en.json"
   fi
 
-  # 3. Drain any existing binds BEFORE staging. The staged QML is the source
-  # of a live bind after a previous apply, and replacing a bind source in
-  # place fails with EBUSY, so unmounting has to come first.
-  drain_umount "$QML_TARGET_1"
-  drain_umount "$QML_TARGET_2"
-  drain_umount "$STOCK_ASSETS"
-
-  # 4. Stage the persistent wallpaper copy and the compositor QML working copy.
-  cp -f "$WALL_SRC" "$WALLPAPER_STAGE" 2>/dev/null
+  # 3. Stage what this apply would bind, then decide whether anything changed.
+  #
+  # Draining and re-binding an unchanged set is not harmless: while the binds
+  # are down a Home launch reads stock assets, and moving the bind timestamp
+  # forward would make the compositor look as if it had read stale content and
+  # earn it a restart it does not need. So a set that is byte-identical to
+  # what is already live is left exactly as it is.
   fps_now=$(cfg_get_bool fps); [ -n "$fps_now" ] || fps_now=false
-  stage_compositor "$fps_now"
+  stage_compositor "$fps_now" "$COMPOSITOR_STAGE.next"
 
-  # 5. Bind. On this firmware /usr/lib/qt5/qml/WebOSCompositor is a symlink to
-  # /usr/lib/qml/WebOSCompositor, so both QML paths are the same inode and a
-  # second bind would just stack a redundant mount on the same mountpoint.
-  # Resolve and deduplicate, then bind each distinct target exactly once.
-  qml1=$(readlink -f "$QML_TARGET_1" 2>/dev/null); [ -n "$qml1" ] || qml1="$QML_TARGET_1"
-  qml2=$(readlink -f "$QML_TARGET_2" 2>/dev/null); [ -n "$qml2" ] || qml2="$QML_TARGET_2"
-  qml_targets="$qml1"
-  [ "$qml2" = "$qml1" ] || qml_targets="$qml1 $qml2"
-
-  for t in $qml_targets; do
-    binderr=$(mount --bind "$COMPOSITOR_STAGE" "$t" 2>&1 >/dev/null)
-    if [ $? -ne 0 ]; then
-      log_line "apply: bind failed on $t: $binderr"
-      do_revert_internal
-      ntfy_notify "LumaGlass apply failed: compositor bind failed"
-      emit_error "compositor bind failed: $binderr"
-      return 1
-    fi
-  done
-
-  binderr=$(mount --bind "$ASSETS" "$STOCK_ASSETS" 2>&1 >/dev/null)
-  if [ $? -ne 0 ]; then
-    log_line "apply: bind failed on assets: $binderr"
-    do_revert_internal
-    ntfy_notify "LumaGlass apply failed: assets bind failed"
-    emit_error "assets bind failed: $binderr"
-    return 1
+  changed=1
+  if [ "$(md5sum < "$COMPOSITOR_STAGE.next" 2>/dev/null)" = "$(md5sum < "$COMPOSITOR_STAGE" 2>/dev/null)" ] \
+     && [ "$(md5sum < "$WALL_SRC" 2>/dev/null)" = "$(md5sum < "$WALLPAPER_STAGE" 2>/dev/null)" ] \
+     && all_binds_live; then
+    changed=0
+    rm -f "$COMPOSITOR_STAGE.next"
+    log_line "apply: staged set unchanged and every bind live, not remounting"
   fi
 
-  # Every intended bind must be live before we touch the compositor.
-  for t in $qml_targets "$STOCK_ASSETS"; do
-    if ! is_mounted "$t"; then
-      log_line "apply: bind verification failed for $t"
+  if [ "$changed" -eq 1 ]; then
+    # Drain any existing binds BEFORE replacing the stage. The staged QML is
+    # the source of a live bind after a previous apply, and replacing a bind
+    # source in place fails with EBUSY, so unmounting has to come first.
+    drain_umount "$QML_TARGET_1"
+    drain_umount "$QML_TARGET_2"
+    drain_umount "$STOCK_ASSETS"
+
+    # 4. Stage the persistent wallpaper copy and the compositor QML working copy.
+    cp -f "$WALL_SRC" "$WALLPAPER_STAGE" 2>/dev/null
+    mv -f "$COMPOSITOR_STAGE.next" "$COMPOSITOR_STAGE"
+
+    # 5. Bind each distinct target exactly once.
+    resolve_qml_targets
+    for t in $qml_targets; do
+      binderr=$(mount --bind "$COMPOSITOR_STAGE" "$t" 2>&1 >/dev/null)
+      if [ $? -ne 0 ]; then
+        log_line "apply: bind failed on $t: $binderr"
+        do_revert_internal
+        ntfy_notify "LumaGlass apply failed: compositor bind failed"
+        emit_error "compositor bind failed: $binderr"
+        return 1
+      fi
+    done
+
+    binderr=$(mount --bind "$ASSETS" "$STOCK_ASSETS" 2>&1 >/dev/null)
+    if [ $? -ne 0 ]; then
+      log_line "apply: bind failed on assets: $binderr"
       do_revert_internal
-      ntfy_notify "LumaGlass apply failed: bind verification failed"
-      emit_error "bind verification failed for $t"
+      ntfy_notify "LumaGlass apply failed: assets bind failed"
+      emit_error "assets bind failed: $binderr"
       return 1
     fi
-  done
+
+    # Every intended bind must be live before we touch the compositor.
+    for t in $qml_targets "$STOCK_ASSETS"; do
+      if ! is_mounted "$t"; then
+        log_line "apply: bind verification failed for $t"
+        do_revert_internal
+        ntfy_notify "LumaGlass apply failed: bind verification failed"
+        emit_error "bind verification failed for $t"
+        return 1
+      fi
+    done
+    date +%s > "$BOUND_AT"
+  fi
 
   # 6. Restart the compositor only if it needs it.
   #
-  # The compositor reads the QML once, at startup. If it started AFTER every
-  # bind went live - the normal case on the boot path, where this runs while
-  # the compositor is still coming up - it already loaded the modded QML and
-  # restarting it only blacks the screen for 15s for no reason. That restart
-  # on the boot path is also what used to get interrupted by the set powering
-  # off, leaving Homebrew Channel's failsafe flag armed.
-  bind_epoch=$(date +%s)
-  start_marker=$(wc -l < "$MSGLOG" 2>/dev/null | tr -d ' '); [ -n "$start_marker" ] || start_marker=0
+  # The compositor reads the QML once, at startup. If it started AFTER the
+  # content it is showing went live - the case when boot-bind won the race at
+  # boot, or after a no-op re-apply - it already loaded the modded QML and a
+  # restart only blacks the screen for 15s for nothing. That restart on the
+  # boot path is also what used to get interrupted by the set powering off,
+  # leaving Homebrew Channel's failsafe flag armed.
+  bind_epoch=$(cat "$BOUND_AT" 2>/dev/null); [ -n "$bind_epoch" ] || bind_epoch=$(date +%s)
 
   restart_needed=1
   s_epoch=$(surface_start_epoch)
@@ -517,7 +580,7 @@ verb_apply() {
     log_line "apply: compositor not running, binds staged for its first start"
   elif [ "$s_epoch" -ge "$bind_epoch" ] 2>/dev/null; then
     restart_needed=0
-    log_line "apply: compositor started at $s_epoch, after binds, no restart needed"
+    log_line "apply: compositor started at $s_epoch, after binds at $bind_epoch, no restart needed"
   elif ! panel_is_active; then
     # Nothing is being presented, so the next natural compositor start will
     # pick the binds up. Forcing one here races the power transition.
@@ -525,7 +588,14 @@ verb_apply() {
     log_line "apply: panel not active, binds staged for next compositor start"
   fi
 
+  # Failures are judged from the moment the compositor that read this content
+  # started: after our restart, or at its own start when no restart was needed.
+  check_from="$s_epoch"
   if [ "$restart_needed" -eq 1 ]; then
+    check_from=$(date +%s)
+    # From here on the content is what the (restarted) compositor shows, so a
+    # later no-op apply must not restart it again.
+    printf '%s\n' "$check_from" > "$BOUND_AT"
     if ! restart_surface; then
       log_line "apply: surface-manager-daemon did not come back active"
       do_revert_internal
@@ -537,27 +607,84 @@ verb_apply() {
     relaunch_home
   fi
 
-  # 7. Verify: no shader compile failures logged since the marker; auto-revert if so.
-  shader_fail=0
-  if [ -r "$MSGLOG" ]; then
-    if sed -n "$((start_marker+1)),\$p" "$MSGLOG" 2>/dev/null | grep -qa 'shader compilation failed'; then
-      shader_fail=1
-    fi
-  fi
-
-  if [ "$shader_fail" -eq 1 ]; then
-    log_line "apply: shader compilation failure detected post-restart, auto-reverting"
+  # 7. Verify: no shader compile failures logged by that compositor; auto-revert if so.
+  if [ -n "$check_from" ] && shader_failed_since "$check_from"; then
+    log_line "apply: shader compilation failure detected, auto-reverting"
+    rm -f "$VERIFIED"
     do_revert_internal
     ntfy_notify "LumaGlass apply failed: shader compilation error, auto-reverted to stock"
     emit_error "shader compilation failed; auto-reverted to stock"
     return 1
   fi
+  staged_hash > "$VERIFIED"
 
   mounts=$(count_mounts)
   took=$(( $(date +%s) - t0 ))
   log_line "apply: success version=$version mounts=$mounts took=${took}s"
   ntfy_notify "LumaGlass applied (v$version)"
   printf '{"ok":true,"applied":true,"mounts":%s,"took":%s}\n' "$mounts" "$took"
+  return 0
+}
+
+# ---------------------------------------------------------------- boot-bind
+
+verb_boot_bind() {
+  # The boot hook's opening move. At boot the compositor starts about two
+  # seconds after Homebrew Channel's hooks run, and a full apply spends ~5s
+  # staging before its binds land - so the compositor reads stock QML and has
+  # to be restarted, which is the boot-time black screen. This binds the
+  # previous boot's staged set in well under a second, so the compositor reads
+  # the modded copy on its own first start. The apply that follows then finds
+  # nothing to change and no restart to make.
+  #
+  # It only ever binds a set that a full apply has already verified on this
+  # firmware, and it skips itself once after a boot that never reported ok.
+  if ! take_mutation_lock; then
+    emit_error "another apply or revert is still running"
+    return 1
+  fi
+  if [ -f "$BOOT_PENDING" ]; then
+    rm -f "$BOOT_PENDING"
+    log_line "boot-bind: previous boot never completed, skipping fast path once"
+    printf '{"ok":true,"bound":false,"reason":"failsafe"}\n'
+    return 0
+  fi
+  if [ ! -f "$COMPOSITOR_STAGE" ] || [ ! -f "$WALLPAPER_STAGE" ] || [ ! -f "$ASSETS/home.xml" ] || [ ! -d "$ASSETS/i18n" ]; then
+    log_line "boot-bind: no staged set, leaving it to apply"
+    printf '{"ok":true,"bound":false,"reason":"no-stage"}\n'
+    return 0
+  fi
+  if [ "$(staged_hash)" != "$(cat "$VERIFIED" 2>/dev/null)" ]; then
+    log_line "boot-bind: staged set is not the verified one, leaving it to apply"
+    printf '{"ok":true,"bound":false,"reason":"unverified"}\n'
+    return 0
+  fi
+
+  touch "$BOOT_PENDING"
+  resolve_qml_targets
+  n=0
+  for t in $qml_targets; do
+    is_mounted "$t" && continue
+    mount --bind "$COMPOSITOR_STAGE" "$t" >/dev/null 2>&1 && n=$((n+1))
+  done
+  if ! is_mounted "$STOCK_ASSETS"; then
+    mount --bind "$ASSETS" "$STOCK_ASSETS" >/dev/null 2>&1 && n=$((n+1))
+  fi
+  if all_binds_live; then
+    date +%s > "$BOUND_AT"
+    log_line "boot-bind: $n bind(s) made, all live"
+    printf '{"ok":true,"bound":true,"mounts":%s}\n' "$(count_mounts)"
+  else
+    log_line "boot-bind: binds incomplete after $n mount(s), leaving it to apply"
+    printf '{"ok":true,"bound":false,"reason":"incomplete"}\n'
+  fi
+  return 0
+}
+
+verb_boot_ok() {
+  # Called by the boot hook once the boot's apply reported ok.
+  rm -f "$BOOT_PENDING"
+  printf '{"ok":true}\n'
   return 0
 }
 
@@ -618,13 +745,15 @@ verb_fps() {
     *) emit_error "fps requires on or off"; return 1 ;;
   esac
   set_cfg_bool fps "$val"
+  # The overlay is a property in the staged QML, so flipping it is a re-apply:
+  # apply sees the staged set change, rebinds once per distinct target, takes
+  # the mutation lock, and runs the shader verification. The old inline
+  # version bound both QML paths - the same inode - and stacked two mounts.
   if [ "$(count_mounts)" -gt 0 ]; then
-    stage_compositor "$val"
-    drain_umount "$QML_TARGET_1"
-    drain_umount "$QML_TARGET_2"
-    mount --bind "$COMPOSITOR_STAGE" "$QML_TARGET_1" 2>/dev/null
-    mount --bind "$COMPOSITOR_STAGE" "$QML_TARGET_2" 2>/dev/null
-    restart_surface >/dev/null 2>&1
+    if ! verb_apply >/dev/null; then
+      emit_error "fps set, but re-apply failed; see log"
+      return 1
+    fi
   fi
   log_line "fps: set to $val"
   printf '{"ok":true,"fps":%s}\n' "$val"
@@ -707,6 +836,8 @@ ensure_config
 case "$VERB" in
   status) verb_status; exit $? ;;
   apply) verb_apply; exit $? ;;
+  boot-bind) verb_boot_bind; exit $? ;;
+  boot-ok) verb_boot_ok; exit $? ;;
   revert) verb_revert; exit $? ;;
   persist) verb_persist "${2:-}"; exit $? ;;
   fps) verb_fps "${2:-}"; exit $? ;;
