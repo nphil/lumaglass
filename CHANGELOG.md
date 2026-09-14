@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- App tiles in the dock are glass. LG draws each tile as a flat dark
+  background with the artwork on it, antialiased against its black
+  scaffold; on dark icons that read as a ghost box with a lit hairline
+  around the artwork. The tile background is now the same glass material
+  as the widget cards, its edge is blended over the wallpaper, and it gets
+  a lit bevel and a soft shadow. Artwork pixels are never altered. Tile
+  geometry is not known to the compositor (the row scrolls and scales), so
+  it is derived per frame from a half-resolution blurred mask of the dock
+  band; measured 60 fps while the row scrolls.
+
 ### Fixed
 
 - Home's app-edit page (long-press on an app) no longer shows through the

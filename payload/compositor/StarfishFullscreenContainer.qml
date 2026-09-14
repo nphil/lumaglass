@@ -254,6 +254,34 @@ FocusScope {
             }"
     }
     ShaderEffectSource { id: editProbeSrc; sourceItem: editProbe; visible: false; live: true }
+    // App tiles live in Home's surface, scroll and scale under focus, so their
+    // geometry is not known here. What is known per pixel is scaffold vs not.
+    // That mask, taken at half resolution over the dock band and blurred, is a
+    // cheap distance field: its value says how far inside a tile a pixel is, its
+    // gradient is the edge normal. Both drive the bevel light and the shadow
+    // the tiles cast; the exact tile edge still comes from the full-res surface.
+    ShaderEffect {
+        id: dockMask
+        width: 960; height: 130
+        visible: false
+        property variant src: homeSurfSrc
+        property real bandY: 780 / 1080
+        property real bandH: 260 / 1080
+        fragmentShader: "
+            varying highp vec2 qt_TexCoord0;
+            uniform sampler2D src;
+            uniform lowp float qt_Opacity;
+            uniform highp float bandY;
+            uniform highp float bandH;
+            void main() {
+                lowp vec4 c = texture2D(src, vec2(qt_TexCoord0.x, bandY + qt_TexCoord0.y * bandH));
+                lowp float m = step(0.003, max(c.r, max(c.g, c.b))) * step(0.5, c.a);
+                gl_FragColor = vec4(m, m, m, 1.0);
+            }"
+    }
+    ShaderEffectSource { id: dockMaskSrc; sourceItem: dockMask; visible: false; live: true }
+    GaussianBlur { id: dockMaskBlur; width: 960; height: 130; source: dockMaskSrc; radius: 5; samples: 11; visible: false }
+    ShaderEffectSource { id: dockBlurSrc; sourceItem: dockMaskBlur; visible: false; live: true }
     // The widget layer is composited by homeKey, and only into scaffold pixels, so
     // nothing Home draws itself - icons, focus rings, its edit page - can end up under a
     // widget.
@@ -822,6 +850,16 @@ lowp float isW(highp vec2 uv) { lowp vec4 s = texture2D(src, uv); return step(0.
         property variant widgets: homeWidgetsSrc
         // Backdrop while Home's edit page is up: the blurred wallpaper, this dark.
         property real editDim: 0.22
+        // dock tile treatment (see dockMask): band it covers, mask texel size
+        property variant dockBlur: dockBlurSrc
+        property real bandY: dockMask.bandY
+        property real bandH: dockMask.bandH
+        property real mpx: 1.0 / dockMask.width
+        property real mpy: 1.0 / dockMask.height
+        property real tileShadow: 0.5
+        // LG's flat tile background (webOS 10.2.1, measured on the panel plane); becomes the glass slab
+        property color tileBg: "#262339"
+        property vector3d tileBgV: Qt.vector3d(tileBg.r, tileBg.g, tileBg.b)
         // live glass regions (px): dock band + rail pill. Adjustable at runtime.
         property rect dockRect: Qt.rect(-80, 812, 2080, 200)
         property rect railRect: Qt.rect(26, 42, 104, 360)
@@ -878,6 +916,13 @@ lowp float isW(highp vec2 uv) { lowp vec4 s = texture2D(src, uv); return step(0.
             uniform sampler2D probe;
             uniform sampler2D widgets;
             uniform highp float editDim;
+            uniform sampler2D dockBlur;
+            uniform highp float bandY;
+            uniform highp float bandH;
+            uniform highp float mpx;
+            uniform highp float mpy;
+            uniform highp float tileShadow;
+            uniform highp vec3 tileBgV;
             lowp float isW(highp vec2 uv) { lowp vec4 s = texture2D(src, uv); return step(0.995, min(s.r, min(s.g, s.b))) * step(0.5, s.a); }
             // signed distance to a rounded rect, in height-normalised units (aspect-corrected); negative = inside
             highp float sdRR(highp vec2 uv, highp vec4 r, highp float rad) {
@@ -991,6 +1036,57 @@ lowp float isW(highp vec2 uv) { lowp vec4 s = texture2D(src, uv); return step(0.
                                 col = w;
                             }
                         }
+                    }
+                }
+                // ---- app tiles ----
+                // Each tile is LG's flat background (tileBg) with the app's artwork on it; where the
+                // artwork is inset or has its own corners, that flat colour shows as a frame. Here
+                // the background becomes a glass slab (same material as the widget cards), the
+                // edge is re-blended over the wallpaper instead of the black scaffold LG
+                // antialiased against, and the slab gets a lit bevel and casts a shadow. Artwork
+                // is never touched.
+                highp float bandT = (qt_TexCoord0.y - bandY) / bandH;
+                if (bandT > 0.0 && bandT < 1.0 && edit < 0.5 && inRail < 0.5) {
+                    highp vec2 muv = vec2(qt_TexCoord0.x, bandT);
+                    highp float m = texture2D(dockBlur, muv).r;
+                    if (isBlack > 0.5) {
+                        highp float sh = texture2D(dockBlur, muv - vec2(0.0, 5.0 * mpy)).r;
+                        col.rgb *= 1.0 - tileShadow * sh * sh;
+                    } else {
+                        // coverage against tileBg: an edge pixel is tileBg scaled by its AA coverage
+                        highp float cov = clamp(max(c.r, max(c.g, c.b)) / max(tileBgV.r, max(tileBgV.g, tileBgV.b)), 0.0, 1.0);
+                        highp float bgMatch = (1.0 - smoothstep(0.02, 0.06, length(c.rgb - tileBgV * cov))) * step(0.15, cov);
+                        // inward direction from the field's gradient; zero deep inside a tile
+                        highp float gx = texture2D(dockBlur, muv + vec2(mpx, 0.0)).r - texture2D(dockBlur, muv - vec2(mpx, 0.0)).r;
+                        highp float gy = texture2D(dockBlur, muv + vec2(0.0, mpy)).r - texture2D(dockBlur, muv - vec2(0.0, mpy)).r;
+                        highp vec2 g = vec2(gx, gy);                            // mask texels are square, so isotropic
+                        highp float gl = length(g);
+                        highp vec2 inw = gl > 0.0001 ? g / gl : vec2(0.0);
+                        highp float e = 1.0 - smoothstep(0.55, 0.85, m);          // 1 at the rim .. 0 flat interior
+                        highp float z = sqrt(max(0.0, 1.0 - e * e));
+                        if (bgMatch > 0.001) {
+                            highp vec2 off = inw * (1.0 - z) * 0.005 * vec2(1.0 / aspect, 1.0);
+                            lowp vec3 gb = texture2D(wallb, qt_TexCoord0 + off).rgb;
+                            gb = mix(gb, tintV, glassTintAmount);
+                            gb = mix(gb, vec3(1.0), 0.08);
+                            col.rgb = mix(col.rgb, gb * cov + w.rgb * (1.0 - cov), bgMatch);
+                        } else if (e > 0.001) {
+                            // artwork that fills the tile: rebuild its own AA edge over the wallpaper,
+                            // only where the pixel really is the colour 3px inward scaled by coverage
+                            lowp vec4 inner = texture2D(src, qt_TexCoord0 + inw * vec2(3.0 * px, 3.0 * py));
+                            highp float acov = clamp(max(c.r, max(c.g, c.b)) / max(max(inner.r, max(inner.g, inner.b)), 0.02), 0.0, 1.0);
+                            highp float wgt = e * (1.0 - smoothstep(0.06, 0.18, length(c.rgb - inner.rgb * acov)));
+                            col.rgb = mix(col.rgb, inner.rgb * acov + w.rgb * (1.0 - acov), wgt);
+                            cov = mix(cov, acov, wgt);
+                        }
+                        // bevel: the same lit quarter-round as the widget cards, top-left key light
+                        highp vec3 N = normalize(vec3(inw * e * 1.6, z + 0.25));
+                        highp vec3 L = normalize(vec3(-0.45, -0.80, 0.55));
+                        highp vec3 H = normalize(L + vec3(0.0, 0.0, 1.0));
+                        highp float lit = 0.25 + 0.75 * clamp(inw.y, 0.0, 1.0);
+                        highp float spec = pow(max(dot(N, H), 0.0), 48.0) * 0.30 * e * lit;
+                        highp float fres = pow(1.0 - clamp(N.z, 0.0, 1.0), 3.0) * 0.10 * lit;
+                        col.rgb += (spec + fres) * rimV * e * cov;
                     }
                 }
                 // widgets go under everything Home draws, and away entirely on the edit page
