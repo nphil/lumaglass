@@ -155,9 +155,15 @@ relaunch_home() {
   # those signals go true well before anything is actually composited, so none
   # of them can be used as the readiness gate - only patience works. The
   # caller is responsible for the post-restart settle before calling this.
+  # turnOnScreen exists for the interactive path: a compositor restart can
+  # leave the panel blanked, and the user asked for the screen. On the boot
+  # path it is wrong: after a crash-recovery "reboot to suspend" the set is
+  # booting in order to go back to standby, and forcing the panel on here
+  # turned a TV the user had switched off back on. The hook sets
+  # LUMAGLASS_BOOT=1; the panel is then whatever the system decided.
   i=0
   while [ "$i" -lt 3 ]; do
-    luna-send -n 1 "$SCREEN_ON_URI" '{}' >/dev/null 2>&1
+    [ "${LUMAGLASS_BOOT:-0}" = "1" ] || luna-send -n 1 "$SCREEN_ON_URI" '{}' >/dev/null 2>&1
     luna-send -n 1 "$HOME_LAUNCH_URI" "$HOME_LAUNCH_PARAMS" >/dev/null 2>&1
     sleep 8
     if home_running; then
