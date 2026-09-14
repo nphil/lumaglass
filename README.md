@@ -6,9 +6,9 @@ Liquid glass home screen for rooted LG webOS TVs. Reskins the stock LG webOS 10 
 
 - **Liquid glass theme**: Layered glass aesthetic with Rose Pine color palette, applied at the compositor level for seamless integration
 - **Abstract wallpaper**: Generated dynamic wallpaper displayed through a transparent Home screen
-- **Decluttered layout**: Simplified home screen with refactored hero strings ("Start a new experience" greeting, time-of-day aware)
-- **Persistent across reboots**: Uses bind mounts and boot hooks; survives TV firmware updates (requires re-apply)
-- **Non-destructive**: All changes are mount-based; original system files untouched, easily reverted
+- **Decluttered layout**: LG's network-loaded recommendation shelf and Q-card row are removed, which is also the single biggest responsiveness win; the hero strings are blanked so the clock and weather widgets own that space
+- **Survives reboots**: an opt-in Homebrew Channel boot hook re-applies the mod after every restart. It does **not** survive a firmware update - an update replaces the system partitions, after which you re-apply from the app (one button)
+- **Non-destructive**: every change is a bind mount over a read-only file plus a private copy under `/var/lib/lumaglass`. No system file is ever written, and `Revert to stock` removes all of it
 
 ## Requirements
 
@@ -20,13 +20,13 @@ Liquid glass home screen for rooted LG webOS TVs. Reskins the stock LG webOS 10 
 
 ### Via Homebrew Channel (Custom Repository)
 
-1. In the Homebrew Channel app, tap **Settings** (gear icon) → **Developer** → **Enable custom repositories**
+1. Open the **Homebrew Channel** app and press the **gear** icon to open Settings
 2. Add this repository URL:
    ```
    https://raw.githubusercontent.com/nphil/lumaglass/main/repo.json
    ```
-3. Tap **Done** and return to the app
-4. LumaGlass will appear in the list; tap to install
+3. Go back to the app list and refresh; **LumaGlass** appears alongside the official packages
+4. Select it and press **Install**. Updates land the same way: bump appears when a new release is tagged
 
 ### Manual Installation (IPK)
 
