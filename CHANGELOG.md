@@ -5,6 +5,24 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.2] - 2026-09-14
+
+### Fixed
+
+- A power cut while the shadow compositor module was being written left the TV
+  with a black screen on the next boot. `/var` is ext4 `data=ordered`, so the
+  directory entries were committed and the file contents were not: the module
+  had all 318 files present holding 212KB instead of 2030741 bytes. The
+  compositor started on it, resolved nothing and presented nothing, and because
+  it was running and healthy no liveness check noticed. `build_shadow` now
+  syncs the contents to disk before the rename publishes them
+- Shadow integrity is checked against a fingerprint of the whole tree, not just
+  the one file we inject. The truncated files were never looked at, so the
+  damaged module was reported as current
+- `boot-bind` restarts the compositor after repairing a module the compositor
+  had already loaded. Rebuilding on disk does nothing for a process that read
+  the bad copy at startup
+
 ## [0.3.1] - 2026-09-14
 
 ### Fixed
