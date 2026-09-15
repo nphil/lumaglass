@@ -1055,7 +1055,12 @@ lowp float isW(highp vec2 uv) { lowp vec4 s = texture2D(src, uv); return step(0.
                     } else {
                         // coverage against tileBg: an edge pixel is tileBg scaled by its AA coverage
                         highp float cov = clamp(max(c.r, max(c.g, c.b)) / max(tileBgV.r, max(tileBgV.g, tileBgV.b)), 0.0, 1.0);
-                        highp float bgMatch = (1.0 - smoothstep(0.02, 0.06, length(c.rgb - tileBgV * cov))) * step(0.15, cov);
+                        // Only the chrome colour itself becomes glass. Normalising by coverage makes
+                        // every near-black tint look like dim chrome, so a pixel must also be bright
+                        // enough to be chrome at real coverage: >= 0.10 inside the tile, or, at the
+                        // rim where the antialiased fringe lives, >= 20% coverage.
+                        highp float covGate = m < 0.62 ? step(0.2, cov) : step(0.10, max(c.r, max(c.g, c.b)));
+                        highp float bgMatch = (1.0 - smoothstep(0.02, 0.06, length(c.rgb - tileBgV * cov))) * covGate;
                         // inward direction from the field's gradient; zero deep inside a tile
                         highp float gx = texture2D(dockBlur, muv + vec2(mpx, 0.0)).r - texture2D(dockBlur, muv - vec2(mpx, 0.0)).r;
                         highp float gy = texture2D(dockBlur, muv + vec2(0.0, mpy)).r - texture2D(dockBlur, muv - vec2(0.0, mpy)).r;
@@ -1071,13 +1076,37 @@ lowp float isW(highp vec2 uv) { lowp vec4 s = texture2D(src, uv); return step(0.
                             gb = mix(gb, vec3(1.0), 0.08);
                             col.rgb = mix(col.rgb, gb * cov + w.rgb * (1.0 - cov), bgMatch);
                         } else if (e > 0.001) {
-                            // artwork that fills the tile: rebuild its own AA edge over the wallpaper,
-                            // only where the pixel really is the colour 3px inward scaled by coverage
+                            // The fill colour is the nearest dark, non-black pixel along the inward
+                            // normal that is not the hairline; the rim is stepped, so it can be 1..4 px in.
                             lowp vec4 inner = texture2D(src, qt_TexCoord0 + inw * vec2(3.0 * px, 3.0 * py));
-                            highp float acov = clamp(max(c.r, max(c.g, c.b)) / max(max(inner.r, max(inner.g, inner.b)), 0.02), 0.0, 1.0);
-                            highp float wgt = e * (1.0 - smoothstep(0.06, 0.18, length(c.rgb - inner.rgb * acov)));
-                            col.rgb = mix(col.rgb, inner.rgb * acov + w.rgb * (1.0 - acov), wgt);
-                            cov = mix(cov, acov, wgt);
+                            lowp vec3 fillc = vec3(0.0);
+                            for (int k = 1; k <= 4; k++) {
+                                lowp vec3 t = texture2D(src, qt_TexCoord0 + inw * vec2(float(k) * px, float(k) * py)).rgb;
+                                highp float tl = dot(t, vec3(0.299, 0.587, 0.114));
+                                if (tl > 0.003 && tl < 0.13) { fillc = t; break; }
+                            }
+                            highp float cLum = dot(c.rgb, vec3(0.299, 0.587, 0.114));
+                            highp float cSat = max(c.r, max(c.g, c.b)) - min(c.r, min(c.g, c.b));
+                            highp float fLum = dot(fillc, vec3(0.299, 0.587, 0.114));
+                            if (fLum > 0.003 && cSat < 0.05 && cLum < 0.24) {
+                                // Dark tile edge. Home draws a 1px neutral grey hairline (43/255 full,
+                                // measured) along the edge of any tile darker than ~#282828, stepped and
+                                // antialiased against the black scaffold at the rounded corners. Every
+                                // neutral pixel here up to that value is the hairline at some coverage,
+                                // and the hairline is where the tile ends: paint it as tile colour over
+                                // the wallpaper at coverage = brightness / hairline. A pixel already at
+                                // the fill colour stays as it is.
+                                highp float a = cLum <= fLum + 0.01 ? 1.0 : clamp(cLum / 0.169, 0.0, 1.0);
+                                col.rgb = fillc * a + w.rgb * (1.0 - a);
+                                cov = a;
+                            } else {
+                                // artwork that fills the tile: rebuild its own AA edge over the wallpaper,
+                                // only where the pixel really is the colour 3px inward scaled by coverage
+                                highp float acov = clamp(max(c.r, max(c.g, c.b)) / max(max(inner.r, max(inner.g, inner.b)), 0.02), 0.0, 1.0);
+                                highp float wgt = e * (1.0 - smoothstep(0.06, 0.18, length(c.rgb - inner.rgb * acov)));
+                                col.rgb = mix(col.rgb, inner.rgb * acov + w.rgb * (1.0 - acov), wgt);
+                                cov = mix(cov, acov, wgt);
+                            }
                         }
                         // bevel: the same lit quarter-round as the widget cards, top-left key light
                         highp vec3 N = normalize(vec3(inw * e * 1.6, z + 0.25));

@@ -21,6 +21,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   keys pure black as Home's scaffold. Runs at apply and at boot (an updated
   app ships stock colours again); sam and homelaunchpoints are restarted
   only when something changed. `revert` restores every file touched.
+- Dark tiles no longer show Home's hairline. Home draws a 1px neutral grey
+  line (43/255, measured) inside the edge of any tile darker than about
+  `#282828`, stepped and antialiased against the black scaffold at the
+  corners. The shader now reads it as the tile's antialiased outline and
+  paints tile colour over the wallpaper at the line's coverage, so PLX,
+  Apple TV and GeForce get the same clean rounded edge as a light tile.
+  The glass-slab match is also gated on real brightness, so a dark tile
+  colour is never mistaken for dim chrome.
 
 ### Changed
 
