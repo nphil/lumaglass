@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Dock tiles are filled edge to edge from their icons. Home paints each tile
+  as the launch point's `iconColor` with the icon on top; LG's own apps ship
+  the two to match, most third-party and homebrew apps do not, which showed
+  as a frame of the wrong colour around the artwork. `tools/tileicons.js`
+  (runs on the set under node) reads every launch point's icon and sets
+  `iconColor` to the artwork's edge colour where it fills its canvas, or to
+  a colour derived from the wallpaper's hue where the artwork floats on
+  transparency and no colour was chosen; developer-chosen colours are kept.
+  Pure-black pixels in icons are lifted to `#060606`, since the compositor
+  keys pure black as Home's scaffold. Runs at apply and at boot (an updated
+  app ships stock colours again); sam and homelaunchpoints are restarted
+  only when something changed. `revert` restores every file touched.
+
 ### Changed
 
 - App tiles in the dock are glass. LG draws each tile as a flat dark

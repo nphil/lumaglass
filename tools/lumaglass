@@ -624,6 +624,49 @@ disarm_restart_crashes() {
 
 # ------------------------------------------------------------------- revert
 
+# ---------------------------------------------------------------- tile icons
+# Dock tiles are Home painting each launch point's iconColor with its icon on
+# top; tools/tileicons.js derives the colour from the icon so the tile is
+# filled edge to edge, and lifts pure black in icons (the compositor keys pure
+# black as scaffold). Both are appinfo.json / icon file edits that sam and
+# homelaunchpoints only read on start, so a change means restarting both;
+# neither restart disturbs the user's row order (moveLaunchPoint state is
+# db8-backed and survived it, measured), but sam's takes Home down, so the
+# caller relaunches Home afterwards.
+TILEICONS="$APPDIR/tools/tileicons.js"
+NODE=/usr/bin/node
+TILES_CHANGED=0
+
+restart_launchpoint_services() {
+  systemctl restart sam.service >/dev/null 2>&1
+  i=0; while [ "$i" -lt 20 ] && ! systemctl is-active sam.service >/dev/null 2>&1; do sleep 1; i=$((i+1)); done
+  systemctl restart homelaunchpoints.service >/dev/null 2>&1
+  i=0; while [ "$i" -lt 20 ] && ! systemctl is-active homelaunchpoints.service >/dev/null 2>&1; do sleep 1; i=$((i+1)); done
+}
+
+apply_tile_icons() {
+  TILES_CHANGED=0
+  [ -x "$NODE" ] && [ -f "$TILEICONS" ] || return 0
+  out=$("$NODE" "$TILEICONS" apply "$STATE" "$WALLPAPER_STAGE" 2>>"$LOGFILE") || { log_line "tile icons: failed"; return 0; }
+  n=$(printf '%s' "$out" | sed -n 's/.*"changed":\([0-9]*\).*/\1/p'); [ -n "$n" ] || n=0
+  if [ "$n" -gt 0 ]; then
+    log_line "tile icons: $n change(s): $(printf '%s' "$out" | sed -n 's/.*"log":\(.*\)}$/\1/p' | cut -c1-400)"
+    restart_launchpoint_services
+    TILES_CHANGED=1
+  fi
+}
+
+revert_tile_icons() {
+  [ -x "$NODE" ] && [ -f "$TILEICONS" ] || return 0
+  out=$("$NODE" "$TILEICONS" revert "$STATE" 2>>"$LOGFILE") || return 0
+  n=$(printf '%s' "$out" | sed -n 's/.*"restored":\([0-9]*\).*/\1/p'); [ -n "$n" ] || n=0
+  if [ "$n" -gt 0 ]; then
+    log_line "tile icons: restored $n file(s)"
+    restart_launchpoint_services
+    REVERT_CHANGED=1
+  fi
+}
+
 do_revert_internal() {
   # Mechanics only; never prints. Sets REVERT_CHANGED=1 if anything was
   # actually mounted or restored, so callers can decide whether a disruptive
@@ -645,24 +688,7 @@ do_revert_internal() {
   if is_mounted "$STOCK_ASSETS"; then REVERT_CHANGED=1; fi
   drain_umount "$STOCK_ASSETS"
 
-  # Restore any icon appinfo.json backups generically: each backup's
-  # destination path is recorded in a sidecar .origpath file so revert never
-  # has to guess an app-id-to-path convention.
-  if [ -d "$BACKUP" ]; then
-    for origfile in "$BACKUP"/*.origpath; do
-      [ -e "$origfile" ] || continue
-      base=${origfile%.origpath}
-      content="$base.appinfo.json"
-      [ -f "$content" ] || continue
-      destpath=$(cat "$origfile" 2>/dev/null)
-      if [ -n "$destpath" ]; then
-        if cp -f "$content" "$destpath" 2>/dev/null; then
-          rm -f "$content" "$origfile"
-          REVERT_CHANGED=1
-        fi
-      fi
-    done
-  fi
+  revert_tile_icons
 
   # Nothing of ours is live any more, so the next apply must not inherit the
   # old bind time and skip a restart the compositor genuinely needs.
@@ -838,6 +864,10 @@ verb_apply() {
     record_bound_now
   fi
 
+  # 5b. Tile colours and black-lift from the icons. Apps installed or updated
+  # since the last apply are covered by the same pass.
+  apply_tile_icons
+
   # 6. Bring the change on screen.
   #
   # The compositor only reads QML at startup, so the shadow reaches the screen
@@ -880,7 +910,7 @@ verb_apply() {
       emit_error "shader compilation failed; auto-reverted to stock"
       return 1
     fi
-  elif [ "$changed" -eq 1 ]; then
+  elif [ "$changed" -eq 1 ] || [ "$TILES_CHANGED" -eq 1 ]; then
     # Compositor already serves the shadow (or is not yet up); only Home needs
     # to re-read the freshly bound assets.
     kill_home_app
@@ -985,6 +1015,10 @@ verb_boot_bind() {
   fi
   if all_binds_live; then
     record_bound_now
+    # An app updated overnight ships stock colours again; fix it before Home
+    # settles. Rarely changes anything, and then only restarts what it must.
+    apply_tile_icons
+    if [ "$TILES_CHANGED" -eq 1 ]; then kill_home_app; relaunch_home; fi
     log_line "boot-bind: $n bind(s) made, assets live, compositor already on shadow=$(compositor_has_shadow && echo yes || echo no)"
     printf '{"ok":true,"bound":true,"mounts":%s}\n' "$(count_mounts)"
   else
