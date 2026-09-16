@@ -101,7 +101,12 @@
     "depth": 0.25,
     "scale": 1,
     "detail": 0.35,
-    "fps": 30
+    "fps": 30,
+    "vignette": 0,
+    "specular": 0,
+    "bloom": 0,
+    "saturation": 1,
+    "contrast": 1
   },
   "idleDim": {
     "enabled": true,

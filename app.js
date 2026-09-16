@@ -106,7 +106,7 @@
     '[mock mode] Using simulated CLI responses'
   ];
 
-  const mockTheme = { wallpaperMotion: { enabled: true, amplitude: 4, speed: 1, depth: 0.25, scale: 1, detail: 0.35, fps: 30 } };
+  const mockTheme = { wallpaperMotion: { enabled: true, amplitude: 4, speed: 1, depth: 0.25, scale: 1, detail: 0.35, fps: 30, vignette: 0, specular: 0, bloom: 0, saturation: 1, contrast: 1 } };
 
   async function mockExec(cmd) {
     // Simulate network delay
@@ -381,7 +381,12 @@
     { key: 'depth', label: 'Depth', min: 0, max: 1, step: 0.05, unit: '', def: 0.25 },
     { key: 'scale', label: 'Wave size', min: 0.5, max: 2.5, step: 0.1, unit: 'x', def: 1 },
     { key: 'detail', label: 'Detail', min: 0, max: 1, step: 0.05, unit: '', def: 0.35 },
-    { key: 'fps', label: 'Frame rate', min: 15, max: 60, step: 5, unit: ' fps', def: 30 }
+    { key: 'fps', label: 'Frame rate', min: 15, max: 60, step: 5, unit: ' fps', def: 30 },
+    { key: 'vignette', label: 'Vignette', min: 0, max: 1, step: 0.05, unit: '', def: 0 },
+    { key: 'specular', label: 'Specular', min: 0, max: 1, step: 0.05, unit: '', def: 0 },
+    { key: 'bloom', label: 'Bloom', min: 0, max: 1, step: 0.05, unit: '', def: 0 },
+    { key: 'saturation', label: 'Saturation', min: 0.5, max: 1.5, step: 0.05, unit: '', def: 1 },
+    { key: 'contrast', label: 'Contrast', min: 0.8, max: 1.3, step: 0.05, unit: '', def: 1 }
   ];
   const wallpaper = { values: {}, timer: null, pending: {} };
 

@@ -2,7 +2,7 @@
 """Rosé Pine silk wallpaper: domain-warped folds, rendered at 4K, Lanczos to 1080p.
 
 Crispness: 2x supersample then Lanczos down; ridge sheen carries sub-pixel edges.
-No banding: ~1% luminance grain plus triangular-PDF dither before 8-bit quantisation.
+No banding: ~0.4% luminance grain plus triangular-PDF dither before 8-bit quantisation.
 OLED: black floor at 18/255, no pure black, brightest sheen kept under 92%.
 """
 import sys
@@ -99,7 +99,7 @@ a = np.clip(a, 0, 1)
 
 FLOOR = 18 / 255
 a = FLOOR + a * (1 - FLOOR)
-a += rng.normal(0, 0.009, a.shape[:2]).astype(np.float32)[..., None]            # ~1% luminance grain
+a += rng.normal(0, 0.004, a.shape[:2]).astype(np.float32)[..., None]            # ~0.4% luminance grain: enough with the dither to break banding, not enough to read as texture
 tri = rng.random(a.shape, dtype=np.float32) + rng.random(a.shape, dtype=np.float32) - 1.0  # TPDF, +/-1 LSB
 q = np.clip(a * 255 + tri, 0, 255)
 out = Image.fromarray(np.round(q).astype(np.uint8))

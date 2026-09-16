@@ -61,7 +61,8 @@ Item {
             motion: { focusMs: 150, focusEasing: "OutCubic", cardMs: 180, cardEasing: "OutCubic",
                       scrollMs: 300, scrollEasing: "OutCubic", labelMs: 120, layerMs: 220, reduced: false },
             tiles: { inset: 19, fullCanvasEdgeAlpha: 0.9, icons: {} },
-            wallpaperMotion: { enabled: true, amplitude: 4, speed: 1, depth: 0.25, scale: 1, detail: 0.35, fps: 30 },
+            wallpaperMotion: { enabled: true, amplitude: 4, speed: 1, depth: 0.25, scale: 1, detail: 0.35, fps: 30,
+                               vignette: 0, specular: 0, bloom: 0, saturation: 1, contrast: 1 },
             idleDim: { enabled: true, minutes: 5, opacity: 0.6 },
             clock: { style: "digital", twelveHour: true, greeting: true, secondHand: "#ff3b5c" },
             weather: { zip: "30311", units: "fahrenheit", days: 5 },
@@ -260,7 +261,7 @@ Item {
         id: wallpaperImg
         anchors.fill: parent
         z: -2
-        visible: !liveWall.visible
+        visible: false
         source: root.resolvePath(theme.wallpaper)
         asynchronous: true
         cache: false
@@ -268,6 +269,42 @@ Item {
                   : root.wallpaperFit === "contain" ? Image.PreserveAspectFit : Image.Stretch
         onStatusChanged: if (status === Image.Ready) root.computeMaterial()
     }
+    // Colour grade (saturation / contrast) baked once into a texture the live pass, the still
+    // path and the glass blur all read; re-baked only when the values change, so grading
+    // costs nothing per frame.
+    ShaderEffect {
+        id: gradePass
+        width: 1920; height: 1080
+        visible: false
+        property variant src: wallpaperImg
+        property real saturationK: root.wallMotion.saturation === undefined ? 1 : root.wallMotion.saturation
+        property real contrastK: root.wallMotion.contrast === undefined ? 1 : root.wallMotion.contrast
+        onSaturationKChanged: gradedTex.scheduleUpdate()
+        onContrastKChanged: gradedTex.scheduleUpdate()
+        fragmentShader: "
+            uniform sampler2D src;
+            uniform mediump float saturationK;
+            uniform mediump float contrastK;
+            uniform lowp float qt_Opacity;
+            varying highp vec2 qt_TexCoord0;
+            void main() {
+                lowp vec3 c = texture2D(src, qt_TexCoord0).rgb;
+                mediump float l = dot(c, vec3(0.299, 0.587, 0.114));
+                c = (mix(vec3(l), c, saturationK) - 0.5) * contrastK + 0.5;
+                gl_FragColor = vec4(c, 1.0) * qt_Opacity;
+            }"
+    }
+    ShaderEffectSource {
+        id: gradedTex
+        sourceItem: gradePass
+        width: 1920; height: 1080
+        textureSize: Qt.size(1920, 1080)
+        live: false
+        z: -2
+        visible: !liveWall.visible && wallpaperImg.status === Image.Ready   // the still path draws the graded texture
+        Connections { target: wallpaperImg; onStatusChanged: if (wallpaperImg.status === Image.Ready) gradedTex.scheduleUpdate() }
+    }
+
     // Live wallpaper (theme.wallpaperMotion): the same texture through a slow domain warp, a
     // few pixels of drift from two sine fields, with the warp also modulating brightness so
     // light appears to play over the waves (the "depth"). One quad, one read per pixel,
@@ -282,7 +319,7 @@ Item {
         anchors.fill: parent
         z: -2
         visible: root.wallMotionOn && wallpaperImg.status === Image.Ready
-        property variant src: wallpaperImg
+        property variant src: gradedTex
         property real t: 0
         property real amp: (root.wallMotion.amplitude || 4) / 1920
         property real speed: root.wallMotion.speed || 1
@@ -298,6 +335,12 @@ Item {
         // phases advanced on the CPU once per tick; the fragment only evaluates the fields
         property vector4d phase: Qt.vector4d(t * 0.70, t * 0.50, t * 0.40, t * 0.90)
         property vector4d params: Qt.vector4d(amp, depth, waveScale, detail)
+        // look: vignette, specular, bloom, saturation | contrast
+        property real vignette: root.wallMotion.vignette === undefined ? 0 : root.wallMotion.vignette
+        property real specular: root.wallMotion.specular === undefined ? 0 : root.wallMotion.specular
+        property real bloom: root.wallMotion.bloom === undefined ? 0 : root.wallMotion.bloom
+        property vector4d look: Qt.vector4d(vignette, specular, bloom, 0)
+        property variant glow: blurTex
         Timer {
             interval: Math.round(1000 / (root.wallMotion.fps || 30))
             running: liveWall.visible && root.hostActive
@@ -311,10 +354,13 @@ Item {
             uniform highp mat4 qt_Matrix;
             uniform highp vec4 phase;
             uniform highp vec4 params;   // amp, depth, scale, detail
+            uniform mediump vec4 look;   // vignette, specular, bloom, saturation
+            uniform sampler2D glow;
             attribute highp vec4 qt_Vertex;
             attribute highp vec2 qt_MultiTexCoord0;
             varying highp vec2 vUv;
             varying mediump float vLight;
+            varying mediump vec3 vAdd;   // specular + bloom, added per fragment
             void main() {
                 highp vec2 uv = qt_MultiTexCoord0;
                 highp float k = params.z;
@@ -325,6 +371,16 @@ Item {
                 vUv = uv + params.x * disp;
                 // light follows the slope of the displacement: crests brighten, troughs darken
                 vLight = 1.0 + params.y * (0.3 * (w1 - 0.5 * w2) + params.w * 0.25 * w3);
+                // glossy ridge: a narrow lobe on the crest of the main field
+                mediump float crest = clamp(0.5 + 0.5 * (w1 + 0.4 * w3), 0.0, 1.0);
+                mediump float spec = look.y * 0.35 * crest * crest * crest * crest * crest * crest;
+                // vignette folded into the light term: quadratic falloff, aspect-corrected
+                highp vec2 q = (uv - 0.5) * vec2(1.0, 0.5625);
+                vLight *= 1.0 - look.x * 0.75 * smoothstep(0.12, 0.42, dot(q, q));
+                // bloom from the already-baked blur, fetched here: the glow is 30px soft, so
+                // sampling it per vertex and interpolating loses nothing and costs no fragment read
+                mediump vec3 bl = look.z > 0.001 ? max(texture2DLod(glow, vUv, 0.0).rgb - 0.3, 0.0) * look.z : vec3(0.0);
+                vAdd = vec3(spec) + bl;
                 gl_Position = qt_Matrix * qt_Vertex;
             }"
         fragmentShader: "
@@ -335,8 +391,9 @@ Item {
             uniform lowp float qt_Opacity;
             varying highp vec2 vUv;
             varying mediump float vLight;
+            varying mediump vec3 vAdd;
             void main() {
-                lowp vec3 c = texture2D(src, vUv).rgb * vLight;
+                lowp vec3 c = texture2D(src, vUv).rgb * vLight + vAdd;
                 mediump float y = vUv.y;
                 mediump vec4 sc = y < 0.55 ? mix(scrimA, scrimB, y / 0.55) : mix(scrimB, scrimC, (y - 0.55) / 0.45);
                 c = mix(c, sc.rgb, sc.a);
@@ -348,7 +405,7 @@ Item {
     // Every Glass samples blurTex at its own screen rect; nothing here runs per frame.
     ShaderEffectSource {
         id: wallHalf
-        sourceItem: wallpaperImg
+        sourceItem: gradedTex
         width: 960; height: 540
         textureSize: Qt.size(960, 540)
         visible: false

@@ -65,6 +65,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   detail and frame rate with the widgets and dock faded out so the wallpaper
   is seen bare; Back saves to theme.json. Other popovers dim the page behind
   them by 30% (22% on the light material).
+- Wallpaper look toggles, all free per frame: vignette and specular
+  (per-vertex, with the wave lighting), bloom (a screen blend of the
+  already-baked blur, fetched per vertex), saturation and contrast (baked
+  once into a graded copy of the wallpaper that the live pass, the still
+  path and the glass blur all read). Measured 58-60 fps with everything on.
+- Wallpaper grain is 0.4% (was 1%): with the TPDF dither that still breaks
+  banding on the dark gradients without reading as texture.
 - OLED care: after `theme.idleDim.minutes` (5) without input the bar, cards
   and dock ease to `theme.idleDim.opacity` (0.6); any key or pointer move
   restores them.

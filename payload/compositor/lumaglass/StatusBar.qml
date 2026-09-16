@@ -162,6 +162,11 @@ Item {
             { label: "Wave size", kind: "slider", key: "scale", value: wm.scale === undefined ? 1 : wm.scale, min: 0.5, max: 2.5, step: 0.1, unit: "x" },
             { label: "Detail", kind: "slider", key: "detail", value: wm.detail === undefined ? 0.35 : wm.detail, min: 0, max: 1, step: 0.05, unit: "" },
             { label: "Frame rate", kind: "slider", key: "fps", value: wm.fps === undefined ? 30 : wm.fps, min: 15, max: 60, step: 5, unit: " fps" },
+            { label: "Vignette", kind: "slider", key: "vignette", value: wm.vignette || 0, min: 0, max: 1, step: 0.05, unit: "" },
+            { label: "Specular", kind: "slider", key: "specular", value: wm.specular || 0, min: 0, max: 1, step: 0.05, unit: "" },
+            { label: "Bloom", kind: "slider", key: "bloom", value: wm.bloom || 0, min: 0, max: 1, step: 0.05, unit: "" },
+            { label: "Saturation", kind: "slider", key: "saturation", value: wm.saturation === undefined ? 1 : wm.saturation, min: 0.5, max: 1.5, step: 0.05, unit: "" },
+            { label: "Contrast", kind: "slider", key: "contrast", value: wm.contrast === undefined ? 1 : wm.contrast, min: 0.8, max: 1.3, step: 0.05, unit: "" },
             { label: "TV settings", action: "tvsettings" } ]
         : []
     property var dirty: ({})
@@ -240,7 +245,7 @@ Item {
                 id: settingsBody
                 visible: bar.popoverType === "settings"
                 width: parent.width
-                height: 34 + bar.popoverRows.length * 52
+                height: 34 + bar.popoverRows.length * 46
                 Text {
                     x: 0; y: 0
                     text: "Wallpaper"
@@ -251,8 +256,8 @@ Item {
                 Repeater {
                     model: bar.popoverType === "settings" ? bar.popoverRows : []
                     delegate: Item {
-                        x: 0; y: 34 + index * 52
-                        width: settingsBody.width; height: 44
+                        x: 0; y: 34 + index * 46
+                        width: settingsBody.width; height: 40
                         Rectangle {
                             anchors.fill: parent
                             radius: 12
