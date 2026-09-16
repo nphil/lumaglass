@@ -52,6 +52,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   colour from `accountmanager/getLoginUserData`) and opens a popover with
   the account and a "Manage LG account" row that launches the LG Account
   app. Popovers take Up/Down/OK, and Back closes them.
+- The wallpaper is alive: the still image is drawn through a slow domain
+  warp (two sine fields, a few pixels of drift, the warp also lighting the
+  waves for depth), evaluated per vertex on a 48x27 mesh so the fragment is
+  one texture read, ticked at 30 fps by a timer rather than the animation
+  clock. `theme.wallpaperMotion` sets amplitude, speed, depth, fps or turns
+  it off; `motion.reduced` disables it. The glass blur stays baked from the
+  still image so nothing above changes.
+- The news card cross-fades between stories (hero images mixed in the
+  card's own shader, text dipping out and in) instead of cutting.
+- Frame budget: a sustained animation with the full layout and the live
+  wallpaper measures 60 fps. Card and tile quads shade only the shadow term
+  outside their rect, use tighter margins and mediump colour math, the
+  scrim is folded into the wallpaper pass, and the covered stock Home
+  surface is skipped at opacity 0.
 - The clock has an analog style (face drawn once, hands as rotation
   transforms, ticking second hand, weekday/date/week strip beside it) next
   to the digital one; `theme.clock.style` selects it.

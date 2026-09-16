@@ -87,7 +87,17 @@ rounded-rect signed distance. No layers, no per-frame effects; focus is a
 uniform plus a transform. Text is `NativeRendering` on integer positions and
 never inside a scaled item (the glass under it scales, the content does not).
 Icons are PNGs rendered by `generators/gen-icons.py` at display size (no
-SVG plugin on the set). Measured: idle 0 frames; the analog second hand's
+SVG plugin on the set).
+
+Frame budget, measured with `focusMs: 5000` and the per-second `[FPSLOG]`
+counter (middle seconds are exact): the set is fill-rate bound. Dock alone
+60; each widget card's glass quad costs ~2 fps until the whole layout sat at
+50, and a two-read live wallpaper took 10 more. What brought it back to 60:
+shadow-only early return outside the card/tile rect, margins trimmed to the
+shadow reach, mediump colour math, scrim folded into the wallpaper pass, the
+covered stock Home surface at opacity 0, and the wallpaper warp moved into
+the vertex shader on a GridMesh. Every new full-screen or card-sized quad
+must be re-measured this way. Measured: idle 0 frames; the analog second hand's
 160 ms tick renders ~10 frames/s; a 150 ms focus change renders 9 frames,
 i.e. 60 fps.
 

@@ -61,6 +61,7 @@ Item {
             motion: { focusMs: 150, focusEasing: "OutCubic", cardMs: 180, cardEasing: "OutCubic",
                       scrollMs: 300, scrollEasing: "OutCubic", labelMs: 120, layerMs: 220, reduced: false },
             tiles: { inset: 19, fullCanvasEdgeAlpha: 0.9, icons: {} },
+            wallpaperMotion: { enabled: true, amplitude: 4, speed: 1, depth: 0.25, fps: 30 },
             clock: { style: "digital", twelveHour: true, greeting: true, secondHand: "#ff3b5c" },
             weather: { zip: "30311", units: "fahrenheit", days: 5 },
             news: { slideMs: 10000, refreshMs: 900000 }
@@ -209,6 +210,7 @@ Item {
         id: wallpaperImg
         anchors.fill: parent
         z: -2
+        visible: !liveWall.visible
         source: root.resolvePath(theme.wallpaper)
         asynchronous: true
         cache: false
@@ -216,15 +218,74 @@ Item {
                   : root.wallpaperFit === "contain" ? Image.PreserveAspectFit : Image.Stretch
         onStatusChanged: if (status === Image.Ready) root.computeMaterial()
     }
-    Rectangle {
-        // theme.<mat>.scrim: 3 stops at 0 / 55 / 100 %
+    // Live wallpaper (theme.wallpaperMotion): the same texture through a slow domain warp, a
+    // few pixels of drift from two sine fields, with the warp also modulating brightness so
+    // light appears to play over the waves (the "depth"). One quad, one read per pixel,
+    // ticked at wallpaperMotion.fps by a timer rather than the animation clock, so idle
+    // draw is bounded and a 60 fps animation on top stays at 60 (measured: a second
+    // parallax read cost 10 fps at full layout). Nothing above it re-renders: the glass
+    // blur is baked from the still image.
+    property var wallMotion: theme.wallpaperMotion || {}
+    property bool wallMotionOn: (wallMotion.enabled !== false) && !root.motionReduced
+    ShaderEffect {
+        id: liveWall
         anchors.fill: parent
-        z: -1
-        gradient: Gradient {
-            GradientStop { position: 0.0; color: root.scrimColor((root.mat.scrim || [0, 0, 0])[0]) }
-            GradientStop { position: 0.55; color: root.scrimColor((root.mat.scrim || [0, 0, 0])[1]) }
-            GradientStop { position: 1.0; color: root.scrimColor((root.mat.scrim || [0, 0, 0])[2]) }
+        z: -2
+        visible: root.wallMotionOn && wallpaperImg.status === Image.Ready
+        property variant src: wallpaperImg
+        property real t: 0
+        property real amp: (root.wallMotion.amplitude || 4) / 1920
+        property real speed: root.wallMotion.speed || 1
+        property real depth: root.wallMotion.depth === undefined ? 0.25 : root.wallMotion.depth
+        property color s0: root.scrimColor((root.mat.scrim || [0, 0, 0])[0])
+        property color s1: root.scrimColor((root.mat.scrim || [0, 0, 0])[1])
+        property color s2: root.scrimColor((root.mat.scrim || [0, 0, 0])[2])
+        property vector4d scrimA: Qt.vector4d(s0.r, s0.g, s0.b, s0.a)
+        property vector4d scrimB: Qt.vector4d(s1.r, s1.g, s1.b, s1.a)
+        property vector4d scrimC: Qt.vector4d(s2.r, s2.g, s2.b, s2.a)
+        // phases advanced on the CPU once per tick; the fragment only evaluates the fields
+        property vector4d phase: Qt.vector4d(t * 0.70, t * 0.50, t * 0.40, 0)
+        Timer {
+            interval: Math.round(1000 / (root.wallMotion.fps || 30))
+            running: liveWall.visible && root.hostActive
+            repeat: true
+            onTriggered: liveWall.t += interval / 1000 * liveWall.speed
         }
+        // The fields are at most 6 cycles across the screen, so they are evaluated per
+        // vertex on a grid and interpolated; the fragment is one read plus the scrim.
+        mesh: GridMesh { resolution: Qt.size(48, 27) }
+        vertexShader: "
+            uniform highp mat4 qt_Matrix;
+            uniform highp vec4 phase;
+            uniform highp float amp;
+            uniform mediump float depth;
+            attribute highp vec4 qt_Vertex;
+            attribute highp vec2 qt_MultiTexCoord0;
+            varying highp vec2 vUv;
+            varying mediump float vLight;
+            void main() {
+                highp vec2 uv = qt_MultiTexCoord0;
+                mediump float w1 = sin(uv.y * 6.0 + phase.x) * cos(uv.x * 4.0 - phase.y);
+                mediump float w2 = sin((uv.x + uv.y) * 5.0 - phase.z);
+                vUv = uv + amp * vec2(w1 + 0.5 * w2, 0.7 * w2 - 0.5 * w1);
+                vLight = 1.0 + depth * 0.3 * (w1 - 0.5 * w2);
+                gl_Position = qt_Matrix * qt_Vertex;
+            }"
+        fragmentShader: "
+            uniform sampler2D src;
+            uniform mediump vec4 scrimA;
+            uniform mediump vec4 scrimB;
+            uniform mediump vec4 scrimC;
+            uniform lowp float qt_Opacity;
+            varying highp vec2 vUv;
+            varying mediump float vLight;
+            void main() {
+                lowp vec3 c = texture2D(src, vUv).rgb * vLight;
+                mediump float y = vUv.y;
+                mediump vec4 sc = y < 0.55 ? mix(scrimA, scrimB, y / 0.55) : mix(scrimB, scrimC, (y - 0.55) / 0.45);
+                c = mix(c, sc.rgb, sc.a);
+                gl_FragColor = vec4(c, 1.0) * qt_Opacity;
+            }"
     }
     // The glass backdrop: wallpaper at half resolution, blurred and saturated once (the
     // sources are static, so the live chain re-renders only when the wallpaper changes).

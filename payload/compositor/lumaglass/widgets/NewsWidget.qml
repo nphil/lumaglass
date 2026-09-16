@@ -124,9 +124,42 @@ Item {
     Timer { interval: refreshMs; running: true; repeat: true; triggeredOnStart: true; onTriggered: root.fetchNews() }
     Timer { interval: slideMs; running: root.items.length > 1; repeat: true; onTriggered: root.advance() }
 
-    property var current: items[index] || { tag: "", src: "", title: "", summary: "", pub: "", img: "" }
-    // rows: hero 196, gap 18, headline (2 lines of 41), gap 8, summary (2 lines of 30), meta 30 at the bottom
+    // What is on screen. A story change is a cross-fade: the next hero image decodes into
+    // the idle slot first (no placeholder flash), then the hero shader mixes A->B over
+    // 420 ms while the text fades out, swaps and fades back in. Opacity on native text and
+    // one mix uniform on a quad already being drawn: nothing extra per frame.
+    property var current: ({ tag: "", src: "", title: "", summary: "", pub: "", img: "" })
+    // rows: hero 196, gap 18, headline (2 lines of 41), gap 8, summary, meta 30 at the bottom
     property int heroH: 196
+    property var pendingItem: null
+    property int fadeMs: 420
+    onIndexChanged: showItem(items[index])
+    onItemsChanged: if (!current.title && items.length) showItem(items[index])
+    function showItem(n) {
+        if (!n) return
+        if (!current.title) { current = n; heroA.source = n.img || ""; return }
+        pendingItem = n
+        var slot = hero.frontIsA ? heroB : heroA
+        if (n.img && slot.source == n.img && slot.status === Image.Ready) { beginFade(); return }
+        slot.source = n.img || ""
+        if (!n.img) beginFade()
+    }
+    function beginFade() {
+        if (!pendingItem) return
+        textFade.restart()
+        heroFade.restart()
+    }
+    SequentialAnimation {
+        id: textFade
+        NumberAnimation { target: textBlock; property: "opacity"; to: 0; duration: root.fadeMs / 2; easing.type: Easing.InQuad }
+        ScriptAction { script: { if (root.pendingItem) root.current = root.pendingItem } }
+        NumberAnimation { target: textBlock; property: "opacity"; to: 1; duration: root.fadeMs / 2; easing.type: Easing.OutQuad }
+    }
+    SequentialAnimation {
+        id: heroFade
+        NumberAnimation { target: hero; property: "mixv"; to: hero.frontIsA ? 1 : 0; duration: root.fadeMs; easing.type: Easing.InOutQuad }
+        ScriptAction { script: { hero.frontIsA = !hero.frontIsA; root.pendingItem = null } }
+    }
 
     // hero: rounded 18, cover-cropped image at exactly the box size (no resampling later)
     Item {
@@ -134,30 +167,46 @@ Item {
         x: 0; y: 0
         width: parent.width
         height: root.heroH
+        property bool frontIsA: true
+        property real mixv: 0       // 0 shows A, 1 shows B
         Rectangle { anchors.fill: parent; radius: 18; color: root.isLight ? "#e9ecf3" : "#222222"; antialiasing: true }
         Image {
-            id: heroImg
+            id: heroA
             visible: false
-            source: root.current.img || ""
             asynchronous: true; cache: true
             sourceSize.width: hero.width
+            onStatusChanged: if (status === Image.Ready && root.pendingItem && !hero.frontIsA) root.beginFade()
+        }
+        Image {
+            id: heroB
+            visible: false
+            asynchronous: true; cache: true
+            sourceSize.width: hero.width
+            onStatusChanged: if (status === Image.Ready && root.pendingItem && hero.frontIsA) root.beginFade()
         }
         ShaderEffect {
-            // cover-crop of the decoded texture through a rounded mask: one quad, no layer
+            // two cover-crops through a rounded mask, mixed by one uniform: one quad, no layer
             anchors.fill: parent
-            visible: heroImg.status === Image.Ready
-            property variant src: heroImg
+            visible: heroA.status === Image.Ready || heroB.status === Image.Ready
+            property variant srcA: heroA
+            property variant srcB: heroB
+            property real mixv: hero.mixv
             property vector2d dims: Qt.vector2d(width, height)
             property real radius: 18
-            property vector2d cover: {
-                var ia = heroImg.implicitHeight > 0 ? heroImg.implicitWidth / heroImg.implicitHeight : 1
+            function coverFor(img) {
+                var ia = img.implicitHeight > 0 ? img.implicitWidth / img.implicitHeight : 1
                 var ba = width / height
                 return ia > ba ? Qt.vector2d(ba / ia, 1) : Qt.vector2d(1, ia / ba)
             }
+            property vector2d coverA: coverFor(heroA)
+            property vector2d coverB: coverFor(heroB)
             fragmentShader: "
-                uniform sampler2D src;
+                uniform sampler2D srcA;
+                uniform sampler2D srcB;
+                uniform mediump float mixv;
                 uniform highp vec2 dims;
-                uniform highp vec2 cover;
+                uniform highp vec2 coverA;
+                uniform highp vec2 coverB;
                 uniform highp float radius;
                 uniform lowp float qt_Opacity;
                 varying highp vec2 qt_TexCoord0;
@@ -166,13 +215,15 @@ Item {
                     highp vec2 hs = dims * 0.5;
                     highp vec2 q = abs(p - hs) - (hs - vec2(radius));
                     highp float d = length(max(q, 0.0)) + min(max(q.x, q.y), 0.0) - radius;
-                    highp float a = 1.0 - smoothstep(-0.75, 0.75, d);
-                    highp vec2 uv = (qt_TexCoord0 - 0.5) * cover + 0.5;
-                    gl_FragColor = texture2D(src, uv) * a * qt_Opacity;
+                    mediump float a = 1.0 - smoothstep(-0.75, 0.75, d);
+                    lowp vec4 ca = texture2D(srcA, (qt_TexCoord0 - 0.5) * coverA + 0.5);
+                    lowp vec4 cb = texture2D(srcB, (qt_TexCoord0 - 0.5) * coverB + 0.5);
+                    gl_FragColor = mix(ca, cb, mixv) * a * qt_Opacity;
                 }"
         }
         Rectangle {
             visible: root.current.src !== ""
+            opacity: textBlock.opacity
             x: 18; y: 16
             width: kicker.implicitWidth + 24; height: 39; radius: 10
             color: root.isLight ? "#b3ffffff" : "#73000000"
@@ -188,6 +239,9 @@ Item {
         }
     }
 
+    Item {
+        id: textBlock
+        anchors.fill: parent
     Text {
         id: headline
         x: 0; y: root.heroH + 18
@@ -247,5 +301,6 @@ Item {
                 }
             }
         }
+    }
     }
 }

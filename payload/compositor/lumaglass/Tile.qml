@@ -50,7 +50,8 @@ Item {
 
     ShaderEffect {
         id: face
-        property real margin: 72
+        // shadow reach when held is 22 + 28 px plus the lift; the glow (off by default) fades by 64
+        property real margin: 56
         x: -margin
         y: -margin - 6 * tile.f
         width: tile.size + 2 * margin
@@ -80,10 +81,10 @@ Item {
             uniform highp float radius;
             uniform highp float inset;
             uniform highp vec2 iconAspect;
-            uniform highp vec4 plateC;
-            uniform highp vec4 accentC;
-            uniform highp float f;
-            uniform highp float glowA;
+            uniform mediump vec4 plateC;
+            uniform mediump vec4 accentC;
+            uniform mediump float f;
+            uniform mediump float glowA;
             uniform lowp float qt_Opacity;
             varying highp vec2 qt_TexCoord0;
             highp float sd(highp vec2 p, highp vec2 hs, highp float r) {
@@ -95,10 +96,15 @@ Item {
                 highp vec2 p = qt_TexCoord0 * dims - vec2(mrg);
                 highp vec2 hs = vec2(T * 0.5);
                 highp float d = sd(p, hs, radius);
-                highp float inside = 1.0 - smoothstep(-0.75, 0.75, d);
-                highp float glow = glowA * f * (1.0 - smoothstep(-36.0, 64.0, d));
-                highp float sA = mix(0.28, 0.6, f), sY = mix(6.0, 26.0, f), sB = mix(9.0, 34.0, f);
-                highp float sh = sA * (1.0 - smoothstep(-sB, sB, sd(p - vec2(0.0, sY), hs, radius)));
+                mediump float sA = mix(0.28, 0.6, f), sY = mix(6.0, 26.0, f), sB = mix(9.0, 34.0, f);
+                mediump float sh = sA * (1.0 - smoothstep(-sB, sB, sd(p - vec2(0.0, sY), hs, radius)));
+                if (d > 0.75) {
+                    mediump float g = glowA * f * (1.0 - smoothstep(-36.0, 64.0, d));
+                    mediump float ao = g + sh - g * sh;
+                    gl_FragColor = vec4(accentC.rgb * g, ao) * qt_Opacity;
+                    return;
+                }
+                mediump float inside = 1.0 - smoothstep(-0.75, 0.75, d);
                 highp vec2 uv = (p - vec2(inset)) / (T - 2.0 * inset);
                 highp vec2 uvf = (uv - 0.5) * iconAspect + 0.5;
                 highp float inBox = step(0.0, uvf.x) * step(uvf.x, 1.0) * step(0.0, uvf.y) * step(uvf.y, 1.0);
@@ -110,10 +116,8 @@ Item {
                 face = mix(face, vec3(1.0), band * mix(0.06, 0.22, f));
                 highp float top = inside * (1.0 - smoothstep(0.5, 1.5, p.y)) * smoothstep(radius * 0.6, radius, min(p.x, T - p.x));
                 face = mix(face, vec3(1.0), top * 0.42 * f);
-                highp float aOut = glow + sh - glow * sh;
-                highp vec3 c = face * inside + accentC.rgb * glow * (1.0 - inside);
-                highp float a = inside + aOut * (1.0 - inside);
-                gl_FragColor = vec4(c, a) * qt_Opacity;
+                mediump float a = inside + sh * (1.0 - inside);
+                gl_FragColor = vec4(face * inside, a) * qt_Opacity;
             }"
     }
 

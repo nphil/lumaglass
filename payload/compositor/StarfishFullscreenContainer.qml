@@ -218,6 +218,16 @@ FocusScope {
         value: lumaHome.active && root.visibleState && lumaHome.status === Loader.Ready
         when: lumaHome.status === Loader.Ready
     }
+    // The stock Home surface is fully covered while LumaHome draws; at opacity 0 the scene
+    // graph skips its full-screen blit (a 1080p texture read and write per frame). Wayland
+    // focus and key delivery do not depend on the item's opacity, and the Binding restores
+    // the value the moment the layer goes away.
+    Binding {
+        target: root.__surfaceItem
+        property: "opacity"
+        value: 0
+        when: lumaHome.visible && root.__surfaceItem
+    }
 
     StarfishFullscreenStandby {
         id : fullscreenCover

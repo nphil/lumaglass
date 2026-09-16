@@ -5,7 +5,9 @@ import QtQuick 2.4
 // (the mock's backdrop-filter), applies the tint, the 1px inset edge, the focus sheen and
 // rim, and draws the drop shadow from the same signed distance, so a card costs one draw
 // call and no framebuffers, and its corners stay antialiased at any scale. Sized to its
-// parent plus `margin` on every side so the shadow has room.
+// parent plus `margin` on every side so the shadow has room. Outside the card only the
+// shadow term runs (an early branch on a coherent region, cheap on Mali); colour math is
+// mediump, coordinates highp.
 ShaderEffect {
     id: glass
 
@@ -19,7 +21,9 @@ ShaderEffect {
     property real screenW: 100
     property real screenH: 100
     property Item backdrop: null           // ShaderEffectSource of the blurred wallpaper
-    property real margin: 110
+    // Shadow reach is shadowY + shadowB (74px focused); the last few pixels of tail are
+    // below 1/255 and can be clipped.
+    property real margin: 60
 
     anchors.fill: parent
     anchors.margins: -margin
@@ -37,12 +41,8 @@ ShaderEffect {
     property real rim: (isLight ? 1.0 : 0.42) * focusMix
     property real sheen: focusMix
     // CSS: normal 0 24px 60px .28 | focus 0 34px 80px .55 + 0 10px 24px .30 (light: .18/.28/.14)
-    property real shadowA: isLight ? 0.18 + 0.10 * focusMix : 0.28 + 0.27 * focusMix
-    property real shadowY: 24 + 10 * focusMix
-    property real shadowB: 30 + 10 * focusMix
-    property real shadow2A: (isLight ? 0.14 : 0.30) * focusMix
-    property real shadow2Y: 10
-    property real shadow2B: 12
+    property vector4d shadow: Qt.vector4d(isLight ? 0.18 + 0.10 * focusMix : 0.28 + 0.27 * focusMix, 24 + 10 * focusMix, 30 + 10 * focusMix, 0)
+    property vector4d shadow2: Qt.vector4d((isLight ? 0.14 : 0.30) * focusMix, 10, 12, 0)
     property vector4d region: Qt.vector4d(screenX / 1920, screenY / 1080, screenW / 1920, screenH / 1080)
     property vector2d dims: Qt.vector2d(width, height)
     property real radius: cardRadius
@@ -58,12 +58,12 @@ ShaderEffect {
         uniform highp vec2 dims;
         uniform highp float margin;
         uniform highp float radius;
-        uniform highp vec4 tint;
-        uniform highp vec4 edge;
-        uniform highp float rim;
-        uniform highp float sheen;
-        uniform highp float shadowA; uniform highp float shadowY; uniform highp float shadowB;
-        uniform highp float shadow2A; uniform highp float shadow2Y; uniform highp float shadow2B;
+        uniform mediump vec4 tint;
+        uniform mediump vec4 edge;
+        uniform mediump float rim;
+        uniform mediump float sheen;
+        uniform mediump vec4 shadow;    // alpha, y offset, blur, -
+        uniform mediump vec4 shadow2;
         uniform lowp float qt_Opacity;
         varying highp vec2 qt_TexCoord0;
         highp float sd(highp vec2 p, highp vec2 hs, highp float r) {
@@ -75,20 +75,28 @@ ShaderEffect {
             highp vec2 p = qt_TexCoord0 * dims - vec2(margin);
             highp vec2 hs = cs * 0.5;
             highp float d = sd(p, hs, radius);
-            highp float inside = 1.0 - smoothstep(-0.75, 0.75, d);
-            highp float s1 = shadowA * (1.0 - smoothstep(-shadowB, shadowB, sd(p - vec2(0.0, shadowY), hs, radius)));
-            highp float s2 = shadow2A * (1.0 - smoothstep(-shadow2B, shadow2B, sd(p - vec2(0.0, shadow2Y), hs, radius)));
-            highp float sh = s1 + s2 - s1 * s2;
+            if (d > 0.75) {
+                mediump float s1 = shadow.x * (1.0 - smoothstep(-shadow.z, shadow.z, sd(p - vec2(0.0, shadow.y), hs, radius)));
+                mediump float s2 = shadow2.x * (1.0 - smoothstep(-shadow2.z, shadow2.z, sd(p - vec2(0.0, shadow2.y), hs, radius)));
+                mediump float sh = s1 + s2 - s1 * s2;
+                gl_FragColor = vec4(0.0, 0.0, 0.0, sh) * qt_Opacity;
+                return;
+            }
+            mediump float inside = 1.0 - smoothstep(-0.75, 0.75, d);
             highp vec2 uv = region.xy + clamp(p / cs, 0.0, 1.0) * region.zw;
-            highp vec3 col = mix(texture2D(src, uv).rgb, tint.rgb, tint.a);
-            highp float t = (p.x / cs.x + p.y / cs.y) * 0.5;
-            highp float g = mix(0.16, 0.05, smoothstep(0.0, 0.38, t)) * (1.0 - smoothstep(0.38, 0.60, t));
-            col = mix(col, vec3(1.0), g * sheen);
-            highp float band = smoothstep(-1.75, -1.0, d);
+            mediump vec3 col = mix(texture2D(src, uv).rgb, tint.rgb, tint.a);
+            if (sheen > 0.001) {
+                mediump float t = (p.x / cs.x + p.y / cs.y) * 0.5;
+                mediump float g = mix(0.16, 0.05, smoothstep(0.0, 0.38, t)) * (1.0 - smoothstep(0.38, 0.60, t));
+                col = mix(col, vec3(1.0), g * sheen);
+                mediump float top = inside * (1.0 - smoothstep(0.5, 1.5, p.y)) * smoothstep(radius * 0.6, radius, min(p.x, cs.x - p.x));
+                col = mix(col, vec3(1.0), top * rim);
+            }
+            mediump float band = smoothstep(-1.75, -1.0, d);
             col = mix(col, edge.rgb, band * edge.a);
-            highp float top = inside * (1.0 - smoothstep(0.5, 1.5, p.y)) * smoothstep(radius * 0.6, radius, min(p.x, cs.x - p.x));
-            col = mix(col, vec3(1.0), top * rim);
-            highp float a = inside + sh * (1.0 - inside);
+            // the edge pixel band also carries the start of the shadow so the outline never gaps
+            mediump float s1 = shadow.x * (1.0 - smoothstep(-shadow.z, shadow.z, sd(p - vec2(0.0, shadow.y), hs, radius)));
+            mediump float a = inside + s1 * (1.0 - inside);
             gl_FragColor = vec4(col * inside, a) * qt_Opacity;
         }"
 }
