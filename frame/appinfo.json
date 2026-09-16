@@ -1,0 +1,17 @@
+{
+  "id": "org.nphil.lumaglass.frame",
+  "version": "0.4.0",
+  "vendor": "nphil",
+  "type": "web",
+  "main": "index.html",
+  "title": "LumaGlass Frame",
+  "icon": "icon.png",
+  "largeIcon": "largeIcon.png",
+  "defaultWindowType": "overlay",
+  "transparent": true,
+  "noSplashOnLaunch": true,
+  "handlesRelaunch": true,
+  "disableBackHistoryAPI": true,
+  "visible": false,
+  "requiredPermissions": ["all"]
+}

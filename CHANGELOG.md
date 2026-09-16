@@ -72,9 +72,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   path and the glass blur all read). Measured 58-60 fps with everything on.
 - Wallpaper grain is 0.4% (was 1%): with the TPDF dither that still breaks
   banding on the dark gradients without reading as texture.
-- OLED care: after `theme.idleDim.minutes` (5) without input the bar, cards
-  and dock ease to `theme.idleDim.opacity` (0.6); any key or pointer move
-  restores them.
+- Mini apps. OK on a widget card hands it the keys (the edge brightens);
+  in the news card Left/Right step through stories (the slideshow holds for
+  30 s after a manual step) and OK opens the article: a glass frame grows
+  out of the card to a centred 1520x860 window, shows a spinner, and the
+  article renders inside it. Back shrinks the frame back into the card.
+  Web content is rendered by a second, overlay-type web app
+  (`org.nphil.lumaglass.frame`, transparent, composited above Home) so
+  Chromium's work never touches the compositor's frame budget; it embeds
+  the page in an iframe where the site allows framing and otherwise builds
+  a reader view (headline, hero image, body) from the fetched HTML, since
+  news sites send `x-frame-options: deny`. Up/Down scroll. The frame app
+  ships as an ipk inside the payload and `apply` installs it through
+  appInstallService when its version changes. Any HTML5 app URL can be
+  opened the same way.
 - The news card cross-fades between stories (hero images mixed in the
   card's own shader, text dipping out and in) instead of cutting.
 - Frame budget: a sustained animation with the full layout and the live

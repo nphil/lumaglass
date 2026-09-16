@@ -17,6 +17,7 @@ Item {
     property string moduleDirUrl: "file:///var/lib/lumaglass/qml/WebOSCompositor/lumaglass/"
     readonly property string packsDirUrl: "file:///var/lib/lumaglass/widgets/"
     property bool focused: false
+    property bool inner: false          // OK was pressed: keys go to the content
     property bool dimmed: false
     property Item backdrop: null
     property int cardMs: 180
@@ -31,6 +32,7 @@ Item {
     readonly property real padSide: 32
 
     signal hoverFocus()
+    signal openMini(var spec)
 
     x: gridX
     y: gridY - cardLift * f
@@ -46,6 +48,7 @@ Item {
         isLight: card.isLight
         cardRadius: card.theme.radius || 26
         focusMix: card.f
+        edgeFocus: card.inner ? 1 : 0
         scale: 1 + (card.cardScale - 1) * card.f
         transformOrigin: Item.Center
         screenX: card.gridX; screenY: card.gridY; screenW: card.width; screenH: card.height
@@ -85,6 +88,9 @@ Item {
     }
 
     function activate() { if (content && typeof content.activate === "function") content.activate() }
+    // true when the content handles keys itself (it gains an inner focus layer on OK)
+    function hasInner() { return !!(content && typeof content.key === "function") }
+    function innerKey(dir) { return hasInner() ? content.key(dir) === true : false }
     function reload() { loadContent() }
 
     function builtinUrl(type) {
@@ -94,7 +100,7 @@ Item {
 
     function contentProps(settings) {
         return { theme: card.theme, mat: card.mat, isLight: card.isLight, entry: card.layoutEntry, settings: settings || {},
-                 width: contentArea.width, height: contentArea.height, focused: card.focused }
+                 width: contentArea.width, height: contentArea.height, focused: card.focused, inner: card.inner }
     }
     function instantiate(url, settings) {
         var comp = Qt.createComponent(url)
@@ -102,7 +108,7 @@ Item {
             if (comp.status === Component.Ready) {
                 if (card.content) { card.content.destroy(); card.content = null }
                 var obj = comp.createObject(contentArea, card.contentProps(settings))
-                if (obj) card.content = obj
+                if (obj) { card.content = obj; if (obj.openMini) obj.openMini.connect(function(spec) { card.openMini(spec) }) }
                 else card.showUnknown(card.layoutEntry.type, "failed to instantiate")
             } else if (comp.status === Component.Error) {
                 card.showUnknown(card.layoutEntry.type, comp.errorString())
@@ -174,6 +180,7 @@ Item {
     }
 
     onFocusedChanged: if (content && "focused" in content) content.focused = card.focused
+    onInnerChanged: if (content && "inner" in content) content.inner = card.inner
     onThemeChanged: if (content && "theme" in content) content.theme = card.theme
     onMatChanged: if (content) { if ("mat" in content) content.mat = card.mat; if ("isLight" in content) content.isLight = card.isLight }
     onWidthChanged: if (content) content.width = contentArea.width

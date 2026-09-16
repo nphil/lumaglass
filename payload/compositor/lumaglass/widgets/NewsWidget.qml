@@ -12,11 +12,28 @@ Item {
     property bool isLight: false
     property var settings: ({})
     property bool focused: false
+    property bool inner: false
 
+    signal openMini(var spec)
+    // OK on the card enters the inner layer (LumaHome does that); inside it Left/Right step
+    // stories, OK opens the article in a mini frame, Back leaves (handled by LumaHome).
+    function key(dir) {
+        if (dir === "left") { step(-1); return true }
+        if (dir === "right") { step(1); return true }
+        if (dir === "ok") { activate(); return true }
+        return false
+    }
+    function step(d) {
+        if (items.length < 2) return
+        index = (index + d + items.length) % items.length
+        holdTimer.restart()
+    }
     function activate() {
         var n = items[index]
-        if (n && n.link) LS.adhoc.call("luna://com.webos.applicationManager", "/launch", JSON.stringify({ id: "com.webos.app.browser", params: { target: n.link } }))
+        if (n && n.link) openMini({ kind: "web", url: n.link, title: n.title, subtitle: (n.src || "") + (n.pub ? " \u00b7 " + ago(n.pub) : ""), source: n.src, ago: ago(n.pub) })
     }
+    // a manual step holds the slideshow for a while so the story is not swept away
+    Timer { id: holdTimer; interval: 30000 }
 
     property var feeds: (theme.news && theme.news.feeds) || [
         { tag: "WORLD", src: "BBC News", url: "https://feeds.bbci.co.uk/news/world/rss.xml" },
@@ -122,7 +139,7 @@ Item {
     function advance() { if (items.length > 1) index = (index + 1) % items.length }
 
     Timer { interval: refreshMs; running: true; repeat: true; triggeredOnStart: true; onTriggered: root.fetchNews() }
-    Timer { interval: slideMs; running: root.items.length > 1; repeat: true; onTriggered: root.advance() }
+    Timer { interval: slideMs; running: root.items.length > 1 && !root.inner && !holdTimer.running; repeat: true; onTriggered: root.advance() }
 
     // What is on screen. A story change is a cross-fade: the next hero image decodes into
     // the idle slot first (no placeholder flash), then the hero shader mixes A->B over
@@ -294,8 +311,8 @@ Item {
                 model: root.items.length
                 delegate: Rectangle {
                     height: 8; radius: 4
-                    width: index === root.index ? 22 : 8
-                    color: index === root.index ? root.mat.ink : root.mat.ink3
+                    width: index === root.index ? (root.inner ? 30 : 22) : 8
+                    color: index === root.index ? root.mat.ink : (root.inner ? root.mat.ink2 : root.mat.ink3)
                     Behavior on width { NumberAnimation { duration: 150 } }
                     Behavior on color { ColorAnimation { duration: 150 } }
                 }

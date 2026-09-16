@@ -119,6 +119,23 @@ identity; a made-up appId gets no reply, silently). Account data:
 `homelaunchpoints/listLaunchPoints` (subscribe) carries `unmovable`;
 `moveLaunchPoint {launchPointId, position}` writes it.
 
+Mini apps: LumaHome's `openMini(spec, fromRect)` grows `MiniFrame.qml` (one
+Glass quad) from a card to the centred frame; `kind: "web"` launches
+`org.nphil.lumaglass.frame` (appinfo `defaultWindowType: "overlay"`,
+`transparent: true`, `visible: false`) with `{url, title, source, ago, mode,
+light, rect}`; the app positions its pane at `rect` and leaves the rest clear.
+WAM honours `defaultWindowType` from appinfo; overlay surfaces are accepted by
+StarfishOverlayView and the compositor's own `handleSystemKeys` closes them on
+Back. LumaHome subscribes to `applicationManager/running` to see the app
+appear (spinner off) and disappear (frame closes). The app reaches the root
+service through `PalmServiceBridge` (`window.webOS` is not present in a WAM
+app without the webOS.js library); fonts must live inside the app directory
+(file:// access to other directories is blocked). `kind: "qml"` content goes
+in `MiniFrame.contentSlot` for native mini apps (weather, HA, calendar).
+`appInstallService/dev/install {id, ipkUrl, subscribe}` installs a local ipk
+on the rooted set; the frame ipk is built by `tools/build-ipk.sh` into
+`payload/frame/` and installed by `install_frame_app` at apply.
+
 Not built yet: widget rearrange/resize (hold on a card, move/snap on the
 grid with animated repositioning, span/rows changes written back to
 layout.json). The dock's move mode is the pattern to extend: pick up on

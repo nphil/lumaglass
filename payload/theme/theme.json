@@ -107,10 +107,5 @@
     "bloom": 0,
     "saturation": 1,
     "contrast": 1
-  },
-  "idleDim": {
-    "enabled": true,
-    "minutes": 5,
-    "opacity": 0.6
   }
 }

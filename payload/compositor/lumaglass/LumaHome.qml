@@ -2,6 +2,7 @@ import QtQuick 2.4
 import QtGraphicalEffects 1.0
 import QtQuick.Window 2.2
 import WebOSCompositorBase 1.0
+import WebOSServices 1.0
 import WebOS.Global 1.0
 import "LumaBus.js" as Bus
 
@@ -63,7 +64,6 @@ Item {
             tiles: { inset: 19, fullCanvasEdgeAlpha: 0.9, icons: {} },
             wallpaperMotion: { enabled: true, amplitude: 4, speed: 1, depth: 0.25, scale: 1, detail: 0.35, fps: 30,
                                vignette: 0, specular: 0, bloom: 0, saturation: 1, contrast: 1 },
-            idleDim: { enabled: true, minutes: 5, opacity: 0.6 },
             clock: { style: "digital", twelveHour: true, greeting: true, secondHand: "#ff3b5c" },
             weather: { zip: "30311", units: "fahrenheit", days: 5 },
             news: { slideMs: 10000, refreshMs: 900000 }
@@ -444,7 +444,10 @@ Item {
     property var statusItems: (layout.statusBar.left || []).concat(layout.statusBar.right || [])
     property bool popoverOpen: focusLayer === "popover"
 
-    onHostActiveChanged: if (hostActive) { focusLayer = "dock"; statusBarItem.requestClosePopover(); touch() }
+    onHostActiveChanged: {
+        if (hostActive) { focusLayer = "dock"; statusBarItem.requestClosePopover() }
+        else if (miniFrame.open) { miniFrame.open = false; miniFrame.loading = false; miniSpec = null; frameAppWanted = false }
+    }
 
     function widgetRectById(id) {
         var i = widgetIndexById(id)
@@ -520,7 +523,6 @@ Item {
     function key(k, pressed, autoRepeat, deviceId) {
         var dir = directionFor(k)
         if (!dir || !hostActive) return false
-        if (pressed && !autoRepeat) touch()
         if (dir === "ok") {
             if (pressed) {
                 if (autoRepeat || okDown) return true
@@ -559,11 +561,28 @@ Item {
             else if (dir === "ok") { if (d.moving) d.endMove(); else d.activate() }
             return true
         }
+        if (focusLayer === "frame") {
+            // only reached while the overlay app is not yet up (loading); Back aborts
+            if (dir === "back") closeMini()
+            return true
+        }
+        if (focusLayer === "widget") {
+            var wIdx = widgetIndexById(widgetFocusId)
+            var w = wIdx >= 0 ? widgetRepeater.itemAt(wIdx) : null
+            if (dir === "back" || !w) { if (w) w.inner = false; focusLayer = "widgets"; return true }
+            w.innerKey(dir)
+            return true
+        }
         if (focusLayer === "widgets") {
             if (dir === "back") return false
             var idx = widgetIndexById(widgetFocusId)
             var entry = idx >= 0 ? nonDockWidgets[idx] : null
-            if (dir === "ok") { var wi = idx >= 0 ? widgetRepeater.itemAt(idx) : null; if (wi) wi.activate(); return true }
+            if (dir === "ok") {
+                var wi = idx >= 0 ? widgetRepeater.itemAt(idx) : null
+                if (!wi) return true
+                if (wi.hasInner()) { wi.inner = true; focusLayer = "widget" } else wi.activate()
+                return true
+            }
             if (dir === "up" && entry && isTopRow(entry)) { statusFocusIndex = nearestStatusByX(cellRect(entry).x + cellRect(entry).width / 2); focusLayer = "statusbar"; return true }
             if (dir === "down" && entry && isBottomRow(entry) && d) {
                 var r = cellRect(entry)
@@ -603,28 +622,13 @@ Item {
 
     // Pointer: anything not over a card/tile lands here so the stock Home underneath never
     // sees the Magic Remote.
-    MouseArea { anchors.fill: parent; hoverEnabled: true; z: 0; onPositionChanged: root.touch() }
+    MouseArea { anchors.fill: parent; hoverEnabled: true; z: 0 }
 
-    // OLED care: after theme.idleDim.minutes without input the chrome eases down to
-    // theme.idleDim.opacity (the wallpaper is already the least static thing on screen; the
-    // bar, cards and dock are what sit still). Any key or pointer move restores it.
-    property var idleDim: theme.idleDim || {}
-    property bool idle: false
-    function touch() { idle = false; idleTimer.restart() }
-    Timer {
-        id: idleTimer
-        interval: Math.max(30, (root.idleDim.minutes || 5) * 60) * 1000
-        running: root.hostActive && (root.idleDim.enabled !== false)
-        onTriggered: root.idle = true
-    }
-    property real chromeOpacity: idle ? (root.idleDim.opacity === undefined ? 0.6 : root.idleDim.opacity) : 1
-    Behavior on chromeOpacity { NumberAnimation { duration: 2000; easing.type: Easing.InOutQuad } }
 
     // ============================================================= chrome
     StatusBar {
         id: statusBarItem
         z: 3
-        opacity: root.chromeOpacity
         x: layout.safe.x
         y: layout.safe.y
         width: 1920 - 2 * layout.safe.x
@@ -653,19 +657,19 @@ Item {
     property bool previewMode: root.popoverOpen && statusBarItem.popoverType === "settings"
     Rectangle {
         anchors.fill: parent
-        z: 2
+        z: miniFrame.open ? 3.5 : 2
         color: root.isLight ? "#ffffff" : "#000000"
-        opacity: root.popoverOpen && !root.previewMode ? statusBarItem.popoverScrim : 0
+        opacity: (root.popoverOpen && !root.previewMode) || miniFrame.open ? statusBarItem.popoverScrim : 0
         visible: opacity > 0.005
         Behavior on opacity { NumberAnimation { duration: root.layerMs; easing.type: Easing.OutCubic } }
-        MouseArea { anchors.fill: parent; hoverEnabled: true; onClicked: { statusBarItem.requestClosePopover(); root.focusLayer = "statusbar" } }
+        MouseArea { anchors.fill: parent; hoverEnabled: true; onClicked: { if (miniFrame.open) root.closeMini(); else { statusBarItem.requestClosePopover(); root.focusLayer = "statusbar" } } }
     }
 
     Item {
         id: widgetLayer
         anchors.fill: parent
         z: 1
-        opacity: (root.previewMode ? 0 : 1) * root.chromeOpacity
+        opacity: root.previewMode ? 0 : 1
         visible: opacity > 0.005
         Behavior on opacity { NumberAnimation { duration: root.layerMs; easing.type: Easing.OutCubic } }
         Repeater {
@@ -682,13 +686,14 @@ Item {
                 layoutEntry: modelData
                 themeDirUrl: root.themeDirUrl
                 moduleDirUrl: root.moduleDirUrl
-                focused: root.focusLayer === "widgets" && root.widgetFocusId === modelData.id
-                dimmed: root.focusLayer === "widgets" && root.widgetFocusId !== modelData.id
+                focused: (root.focusLayer === "widgets" || root.focusLayer === "widget") && root.widgetFocusId === modelData.id
+                dimmed: (root.focusLayer === "widgets" || root.focusLayer === "widget") && root.widgetFocusId !== modelData.id
+                onOpenMini: root.openMini(spec, root.cellRect(modelData))
                 backdrop: blurTex
                 cardMs: root.cardMs
                 cardEasing: root.cardEasing
                 motionReduced: root.motionReduced
-                onHoverFocus: { root.widgetFocusId = modelData.id; root.focusLayer = "widgets" }
+                onHoverFocus: { if (root.focusLayer === "widget" && root.widgetFocusId !== modelData.id) { var o = widgetRepeater.itemAt(root.widgetIndexById(root.widgetFocusId)); if (o) o.inner = false } root.widgetFocusId = modelData.id; if (root.focusLayer !== "widget" || root.widgetFocusId !== modelData.id) root.focusLayer = "widgets" }
             }
         }
     }
@@ -696,7 +701,7 @@ Item {
     Loader {
         id: dockLoader
         z: 1
-        opacity: (root.previewMode ? 0 : 1) * root.chromeOpacity
+        opacity: root.previewMode ? 0 : 1
         visible: opacity > 0.005
         Behavior on opacity { NumberAnimation { duration: root.layerMs; easing.type: Easing.OutCubic } }
         active: root.dockEntry !== null
@@ -729,6 +734,90 @@ Item {
             hoverEnabled: true
             z: -1
             onEntered: root.focusLayer = "dock"
+        }
+    }
+
+    // ============================================================= mini apps
+    // A card's content asks for a mini app with a spec {kind, title, subtitle, url, ...}.
+    // The frame grows out of the card; once it has landed, "web" specs launch the overlay
+    // app org.nphil.lumaglass.frame with the interior rect, "qml" specs instantiate a
+    // component in the frame. Closing: Back in the overlay makes the compositor close the
+    // app; the running-apps subscription sees it go and the frame shrinks back into the
+    // card. Back while still loading closes directly (and the app, if it started).
+    readonly property string frameAppId: "org.nphil.lumaglass.frame"
+    property var miniSpec: null
+    property bool frameAppRunning: false
+    property bool frameAppWanted: false
+    function openMini(spec, fromRect) {
+        if (!spec) return
+        miniSpec = spec
+        miniFrame.fromRect = fromRect
+        miniFrame.title = spec.title || ""
+        miniFrame.subtitle = spec.subtitle || ""
+        miniFrame.loading = true
+        miniFrame.open = true
+        focusLayer = "frame"
+    }
+    function launchFrameApp() {
+        var spec = miniSpec
+        if (!spec || spec.kind !== "web") return
+        var r = miniFrame.interior
+        frameAppWanted = true
+        LS.adhoc.call("luna://com.webos.applicationManager", "/launch", JSON.stringify({
+            id: frameAppId,
+            params: { url: spec.url, title: spec.title || "", source: spec.source || "", ago: spec.ago || "",
+                      mode: spec.mode || "auto", light: root.isLight,
+                      rect: { x: r.x, y: r.y, w: r.width, h: r.height } }
+        }))
+    }
+    function closeMini() {
+        if (!miniFrame.open) return
+        if (frameAppWanted) LS.adhoc.call("luna://com.webos.applicationManager", "/closeByAppId", JSON.stringify({ id: frameAppId }))
+        frameAppWanted = false
+        miniFrame.loading = false
+        miniFrame.open = false
+        miniSpec = null
+        focusLayer = "widget"
+    }
+    Connections {
+        target: miniFrame
+        onLandedChanged: if (miniFrame.landed && miniFrame.open) root.launchFrameApp()
+    }
+    Service {
+        // running-apps subscription: the overlay app appearing ends the spinner, its
+        // disappearance (Back in the overlay) closes the frame
+        id: runningSvc
+        appId: LS.appId
+        onResponse: {
+            try {
+                var msg = JSON.parse(payload)
+                if (!msg.running) return
+                var seen = false
+                for (var i = 0; i < msg.running.length; i++) if (msg.running[i].id === root.frameAppId) seen = true
+                if (seen && !root.frameAppRunning) { root.frameAppRunning = true; spinnerGrace.restart() }
+                if (!seen && root.frameAppRunning) { root.frameAppRunning = false; if (root.frameAppWanted) { root.frameAppWanted = false; root.closeMini() } }
+            } catch (e) {}
+        }
+        Component.onCompleted: call("luna://com.webos.applicationManager", "/running", JSON.stringify({ subscribe: true }))
+    }
+    Timer {
+        // the app paints its own spinner once it is up; ours covers the launch latency
+        id: spinnerGrace
+        interval: 350
+        onTriggered: miniFrame.loading = false
+    }
+    MiniFrame {
+        id: miniFrame
+        z: 4
+        mat: root.mat
+        isLight: root.isLight
+        cardRadius: root.theme.radius || 26
+        backdrop: blurTex
+        motionMs: root.motion.frameMs || 260
+        layerMs: root.layerMs
+        toRect: {
+            var w = 1520, h = 860
+            return Qt.rect(Math.round((1920 - w) / 2), Math.round(layout.safe.y + layout.statusBar.height + layout.statusBar.gap + (1080 - layout.safe.y - layout.statusBar.height - layout.statusBar.gap - layout.safe.y - h) / 2), w, h)
         }
     }
 

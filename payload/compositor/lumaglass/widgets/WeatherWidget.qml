@@ -12,6 +12,7 @@ Item {
     property bool isLight: false
     property var settings: ({})
     property bool focused: false
+    property bool inner: false
     readonly property string iconDir: "file:///var/lib/lumaglass/qml/WebOSCompositor/lumaglass/icons/"
 
     function activate() {}

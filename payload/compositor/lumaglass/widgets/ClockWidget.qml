@@ -15,6 +15,7 @@ Item {
     property bool isLight: false
     property var settings: ({})
     property bool focused: false
+    property bool inner: false
 
     function activate() {}
 

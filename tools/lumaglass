@@ -57,6 +57,9 @@ THEME_SRC="$APPDIR/payload/theme"
 KEYFILTER_SRC="$APPDIR/payload/keyfilter/lumaglass.js"
 KEYFILTER_TOOL="$APPDIR/tools/keyfilter.py"
 THEME_TOOL="$APPDIR/tools/theme.py"
+FRAME_IPK="$APPDIR/payload/frame/org.nphil.lumaglass.frame.ipk"
+FRAME_APP=org.nphil.lumaglass.frame
+FRAME_DIR="/media/developer/apps/usr/palm/applications/$FRAME_APP"
 LUMA_STAGE="$STATE/luma"
 FONTS_DIR="$STATE/fonts"
 THEME_DIR="$STATE/theme"
@@ -896,6 +899,7 @@ verb_apply() {
     return 1
   fi
   stage_theme
+  install_frame_app
   # The key-filter script is read once when the compositor builds its handler
   # chain, so a changed script needs the restart below; compare before the copy.
   kf_changed=1
@@ -1417,6 +1421,29 @@ verb_version() {
 # ------------------------------------------------------------------- dispatch
 
 ensure_config
+
+install_frame_app() {
+  # The frame app ships as an ipk inside the payload and is installed through the
+  # developer install endpoint (the set is rooted, so it is reachable). Re-installed only
+  # when the shipped version differs from the installed one; a failure is logged, never
+  # fatal: Home works without it, the news mini app just cannot open.
+  [ -f "$FRAME_IPK" ] || return 0
+  shipped=$(ar p "$FRAME_IPK" control.tar.gz 2>/dev/null | tar -xzO control 2>/dev/null | sed -n 's/^Version: //p')
+  installed=$(sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$FRAME_DIR/appinfo.json" 2>/dev/null)
+  [ -n "$shipped" ] && [ "$shipped" = "$installed" ] && return 0
+  cp -f "$FRAME_IPK" /tmp/lumaglass-frame.ipk 2>/dev/null || return 0
+  out=$(luna-send -n 3 -f luna://com.webos.appInstallService/dev/install "{\"id\":\"$FRAME_APP\",\"ipkUrl\":\"/tmp/lumaglass-frame.ipk\",\"subscribe\":true}" 2>&1 | tr -d '\n')
+  i=0; while [ "$i" -lt 20 ]; do
+    [ "$(sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$FRAME_DIR/appinfo.json" 2>/dev/null)" = "$shipped" ] && break
+    sleep 1; i=$((i+1))
+  done
+  if [ "$(sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$FRAME_DIR/appinfo.json" 2>/dev/null)" = "$shipped" ]; then
+    log_line "frame app $shipped installed"
+  else
+    log_line "frame app install did not complete: $(printf '%s' "$out" | cut -c1-200)"
+  fi
+  rm -f /tmp/lumaglass-frame.ipk
+}
 
 verb_theme() {
   # theme get | theme set '<json>': the companion app's and the Home popovers' way to edit

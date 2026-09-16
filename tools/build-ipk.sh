@@ -34,6 +34,10 @@ tools/lumaglass
 tools/autostart.sh
 tools/keyfilter.py
 tools/theme.py
+frame/appinfo.json
+frame/index.html
+frame/frame.js
+frame/frame.css
 payload/compositor/StarfishFullscreenContainer.qml
 payload/compositor/lumaglass/LumaHome.qml
 payload/keyfilter/lumaglass.js
@@ -77,6 +81,27 @@ fi
 BUILD_DIR="./build"
 rm -rf "$BUILD_DIR"
 mkdir -p "$BUILD_DIR"
+
+# The frame app (org.nphil.lumaglass.frame, the web half of the Home mini apps) is its own
+# ipk, built first and shipped inside the main payload; tools/lumaglass installs it through
+# appInstallService at apply, so there is still one thing for the user to install.
+build_ipk() {
+    # $1 = package id, $2 = version, $3 = staged data dir, $4 = output path, $5 = description
+    pkg_build="$BUILD_DIR/$1"
+    rm -rf "$pkg_build"; mkdir -p "$pkg_build/control"
+    ( cd "$3" && tar --sort=name --owner=0 --group=0 --numeric-owner --mtime='1970-01-01 00:00:00 UTC' -czf "$OLDPWD/$pkg_build/data.tar.gz" . )
+    printf 'Package: %s\nVersion: %s\nArchitecture: all\nMaintainer: nphil\nDescription: %s\n' "$1" "$2" "$5" > "$pkg_build/control/control"
+    ( cd "$pkg_build/control" && tar --sort=name --owner=0 --group=0 --numeric-owner --mtime='1970-01-01 00:00:00 UTC' -czf ../control.tar.gz control )
+    echo "2.0" > "$pkg_build/debian-binary"
+    rm -f "$4"
+    ar rc "$4" "$pkg_build/debian-binary" "$pkg_build/control.tar.gz" "$pkg_build/data.tar.gz"
+}
+FRAME_VERSION=$(grep -o '"version"[[:space:]]*:[[:space:]]*"[^"]*"' frame/appinfo.json | grep -o '[0-9.]*')
+FRAME_DATA="$BUILD_DIR/frame-data/usr/palm/applications/org.nphil.lumaglass.frame"
+mkdir -p "$FRAME_DATA"
+cp frame/appinfo.json frame/index.html frame/frame.js frame/frame.css frame/icon.png frame/largeIcon.png frame/Manrope-*.ttf "$FRAME_DATA/"
+mkdir -p payload/frame
+build_ipk org.nphil.lumaglass.frame "$FRAME_VERSION" "$BUILD_DIR/frame-data" "payload/frame/org.nphil.lumaglass.frame.ipk" "LumaGlass Frame: the web view behind the Home mini apps"
 
 # Stage data root: usr/palm/applications/org.nphil.lumaglass/
 DATA_ROOT="$BUILD_DIR/data/usr/palm/applications/org.nphil.lumaglass"
