@@ -43,7 +43,9 @@
   "focus": {
     "tileScale": 1.12,
     "cardScale": 1.03,
-    "cardLift": 4
+    "cardLift": 4,
+    "tileGlow": 0,
+    "ambient": 0.3
   },
   "motion": {
     "focusMs": 150,

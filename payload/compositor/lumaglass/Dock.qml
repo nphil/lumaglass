@@ -230,7 +230,7 @@ Item {
             y: Math.round(dock.focusCenter().y - height / 2)
             Behavior on x { enabled: !dock.motionReduced; NumberAnimation { duration: dock.focusMs; easing.type: dock.focusEasing } }
             Behavior on y { enabled: !dock.motionReduced; NumberAnimation { duration: dock.scrollMs; easing.type: dock.scrollEasing } }
-            opacity: dock.focusedLayer ? 0.75 : 0
+            opacity: dock.focusedLayer ? ((dock.theme.focus && dock.theme.focus.ambient !== undefined) ? dock.theme.focus.ambient : 0.3) : 0
             visible: opacity > 0.01
             Behavior on opacity { NumberAnimation { duration: 180 } }
             property vector4d tintC: Qt.vector4d(dock.currentAccent.r, dock.currentAccent.g, dock.currentAccent.b, 0.5)
@@ -274,6 +274,7 @@ Item {
                     labelMs: dock.labelMs
                     motionReduced: dock.motionReduced
                     labelAbove: Math.floor(index / dock.cols) === dock.scrollRow
+                glowStrength: (dock.theme.focus && dock.theme.focus.tileGlow) || 0
                     onHoverFocus: { dock.row = Math.floor(index / dock.cols); dock.col = index % dock.cols; dock.ensureRowVisible() }
                     onActivated: { dock.row = Math.floor(index / dock.cols); dock.col = index % dock.cols; dock.activate() }
                 }

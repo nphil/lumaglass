@@ -3,7 +3,7 @@ import QtQuick 2.4
 // One dock tile: plate, icon, inset edge, shadow, accent glow, top rim and sheen are a single
 // shader quad (icon sampled from an offscreen mipmapped Image), so a tile is one draw call
 // with exact antialiased corners at both rest and focus scale. Focus is depth, not a border:
-// the quad lifts and scales, the shadow deepens, the glow and sheen come up. The name pill
+// the quad lifts and scales, the shadow deepens and drops further, the rim and sheen come up. The name pill
 // is an unscaled sibling, above the tile on the dock's top row and below it otherwise.
 Item {
     id: tile
@@ -24,6 +24,7 @@ Item {
     property int labelMs: 120
     property bool motionReduced: false
     property bool labelAbove: false
+    property real glowStrength: 0      // accent halo around the focused tile; 0 = depth only
 
     signal activated()
     signal hoverFocus()
@@ -49,7 +50,7 @@ Item {
         id: face
         property real margin: 72
         x: -margin
-        y: -margin - 4 * tile.f
+        y: -margin - 6 * tile.f
         width: tile.size + 2 * margin
         height: tile.size + 2 * margin
         scale: 1 + (tile.focusScale - 1) * tile.f
@@ -68,7 +69,7 @@ Item {
         property vector4d plateC: Qt.vector4d(tile.plate.r, tile.plate.g, tile.plate.b, 1)
         property vector4d accentC: Qt.vector4d(tile.accent.r, tile.accent.g, tile.accent.b, 1)
         property real f: tile.f
-        property real glowA: tile.isLight ? 0.7 : 0.9
+        property real glowA: tile.glowStrength
 
         fragmentShader: "
             uniform sampler2D icon;
@@ -94,7 +95,7 @@ Item {
                 highp float d = sd(p, hs, radius);
                 highp float inside = 1.0 - smoothstep(-0.75, 0.75, d);
                 highp float glow = glowA * f * (1.0 - smoothstep(-36.0, 64.0, d));
-                highp float sA = mix(0.28, 0.55, f), sY = mix(6.0, 22.0, f), sB = mix(9.0, 28.0, f);
+                highp float sA = mix(0.28, 0.6, f), sY = mix(6.0, 26.0, f), sB = mix(9.0, 34.0, f);
                 highp float sh = sA * (1.0 - smoothstep(-sB, sB, sd(p - vec2(0.0, sY), hs, radius)));
                 highp vec2 uv = (p - vec2(inset)) / (T - 2.0 * inset);
                 highp vec2 uvf = (uv - 0.5) * iconAspect + 0.5;

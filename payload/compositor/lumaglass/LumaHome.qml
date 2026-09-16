@@ -57,7 +57,7 @@ Item {
                      glassFocus: "#B8FFFFFF", glassFocusEdge: "#E6FFFFFF", scrim: [0.06, 0.10, -0.10] },
             accent: "tile", radius: 26, tileRadius: 22, blurRadius: 30, saturation: 0.25,
             type: { clock: 92, temp: 84 },
-            focus: { tileScale: 1.12, cardScale: 1.03, cardLift: 4 },
+            focus: { tileScale: 1.12, cardScale: 1.03, cardLift: 4, tileGlow: 0, ambient: 0.3 },
             motion: { focusMs: 150, focusEasing: "OutCubic", cardMs: 180, cardEasing: "OutCubic",
                       scrollMs: 300, scrollEasing: "OutCubic", labelMs: 120, layerMs: 220, reduced: false },
             tiles: { inset: 19, fullCanvasEdgeAlpha: 0.9, icons: {} },

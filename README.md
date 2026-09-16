@@ -49,7 +49,7 @@ EXPERIMENTAL - TRY AT YOUR OWN RISK!
 Launch **LumaGlass** from the Homebrew Channel. The app provides:
 
 - **Apply**: Install the mod (mounts compositor QML and Home app assets, restarts services)
-- **Revert**: Remove the mod (unmounts everything, restores original app icons, restarts services)
+- **Revert**: Remove the mod (unmounts everything, unregisters the key filter, restarts services)
 - **Persist** (on/off): Keep the mod applied across reboots (persists state to `/var/lib/lumaglass/`, and installs the early boot hook described below)
 - **Instant on** (on/off): Stay in RAM while off so power-on is instant with the mod already up, or power fully down (see Standby below)
 - **FPS** (on/off): Enable compositor FPS debug overlay (for development)
@@ -59,23 +59,45 @@ Launch **LumaGlass** from the Homebrew Channel. The app provides:
 
 ## How It Works
 
-The mod uses two bind mounts:
+The compositor draws the Home screen; the stock Home app stays resident
+underneath as a placeholder.
 
-### 1. Compositor Layer (`/usr/lib/qml/WebOSCompositor/views/fullscreen/StarfishFullscreenContainer.qml`)
+### 1. Compositor layer
 
-A custom QML file replaces the stock compositor. It:
-- Renders the liquid glass material (three overlapping gradient panes, Rose Pine palette)
-- Displays a 1920×1080 abstract wallpaper on top of the dark compositor background
-- Provides an optional FPS debug overlay for performance tuning
-- Requires restart of `surface-manager-daemon` to take effect (~12 seconds)
+`surface-manager` resolves QML modules through `QML2_IMPORT_PATH`. The tool
+keeps a shadow copy of the `WebOSCompositor` module under `/var/lib/lumaglass/qml`
+with two changes and points the compositor at it through its optional
+environment file:
 
-### 2. Home App Assets (`/usr/palm/applications/com.webos.app.home/data/flutter_assets/assets`)
+- `views/fullscreen/StarfishFullscreenContainer.qml` is stock plus one
+  `Loader` that instantiates `lumaglass/LumaHome.qml` while Home is the
+  container's app.
+- `lumaglass/` holds the Home itself: wallpaper, the glass material (one
+  cached blur of the wallpaper sampled by single-quad shaders for cards,
+  tiles and the status bar), the status bar, the widget grid (clock, Home
+  Assistant, news, weather) and the app dock. The layer animates with
+  transforms and shader uniforms only; nothing runs per frame while idle.
 
-A merged copy of the stock Home app assets directory with overlaid modifications:
-- **`home.xml`**: Restructured layout, hiding the default hero banner to show the compositor wallpaper
-- **`images/{hd,2k,4k}/bg_banner_img.png`**: Pure black (1264×580 / 1920×880 / 3840×1760) blanking the hero region
-- **`i18n/en.json`**: Localized strings; greeting uses time-of-day logic ("Morning", "Afternoon", "Evening", "Night")
-- Requires termination of the Home app and a relaunch to take effect
+Remote keys arrive through `payload/keyfilter/lumaglass.js`, which the tool
+registers in configd's `com.webos.surfacemanager.keyFilters` list; the stock
+key filter loads every entry of that list and picks up changes live. The
+Magic Remote pointer arrives as ordinary QtQuick mouse events.
+
+### 2. Theme
+
+`/var/lib/lumaglass/theme/` is a self-contained package: `theme.json`
+(material tokens, accent, radii, blur, motion, tile rules, widget settings),
+`layout.json` (safe area, column grid with row heights, status bar items,
+widget entries with col/row/span/rows) and the assets they reference
+(wallpaper, fonts, icons, widget QML). Changes reload within 2 s without a
+compositor restart. Widget types resolve to a built-in, a `.qml` file in the
+theme directory, or an installed pack under `/var/lib/lumaglass/widgets/`.
+
+### 3. Home app assets (`/usr/palm/applications/com.webos.app.home/data/flutter_assets/assets`)
+
+A bind mount of a merged copy of the stock assets with a decluttered
+`home.xml`, blank hero banners and adjusted strings, so the placeholder Home
+paints nothing that could show through.
 
 The mod state and configuration live in `/var/lib/lumaglass/`, which persists across reboots if persistence is enabled.
 
@@ -194,7 +216,7 @@ rest on.
 
 The mod is completely non-destructive:
 
-- **Revert**: Launch LumaGlass → **Revert** (removes all mounts, restores original app icons, restarts compositor)
+- **Revert**: Launch LumaGlass → **Revert** (removes all mounts, unregisters the key filter, restarts compositor)
 - **Uninstall**: Revert first, then remove the app from Homebrew Channel (or via `ipk-uninstall` on SSH)
 
 After revert, the TV returns to stock appearance and behavior; no system files were modified.

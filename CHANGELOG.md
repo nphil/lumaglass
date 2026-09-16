@@ -7,54 +7,55 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Added
-
-- Dock tiles are filled edge to edge from their icons. Home paints each tile
-  as the launch point's `iconColor` with the icon on top; LG's own apps ship
-  the two to match, most third-party and homebrew apps do not, which showed
-  as a frame of the wrong colour around the artwork. `tools/tileicons.js`
-  (runs on the set under node) reads every launch point's icon and sets
-  `iconColor` to the artwork's edge colour where it fills its canvas, or to
-  a colour derived from the wallpaper's hue where the artwork floats on
-  transparency and no colour was chosen; developer-chosen colours are kept.
-  Pure-black pixels in icons are lifted to `#060606`, since the compositor
-  keys pure black as Home's scaffold. Runs at apply and at boot (an updated
-  app ships stock colours again); sam and homelaunchpoints are restarted
-  only when something changed. `revert` restores every file touched.
-- Dark tiles no longer show Home's hairline. Home draws a 1px neutral grey
-  line (43/255, measured) inside the edge of any tile darker than about
-  `#282828`, stepped and antialiased against the black scaffold at the
-  corners. The shader now reads it as the tile's antialiased outline and
-  paints tile colour over the wallpaper at the line's coverage, so PLX,
-  Apple TV and GeForce get the same clean rounded edge as a light tile.
-  The glass-slab match is also gated on real brightness, so a dark tile
-  colour is never mistaken for dim chrome.
+## [0.4.0] - 2026-09-15
 
 ### Changed
 
-- App tiles in the dock are glass. LG draws each tile as a flat dark
-  background with the artwork on it, antialiased against its black
-  scaffold; on dark icons that read as a ghost box with a lit hairline
-  around the artwork. The tile background is now the same glass material
-  as the widget cards, its edge is blended over the wallpaper, and it gets
-  a lit bevel and a soft shadow. Artwork pixels are never altered. Tile
-  geometry is not known to the compositor (the row scrolls and scales), so
-  it is derived per frame from a half-resolution blurred mask of the dock
-  band; measured 60 fps while the row scrolls.
+- The Home screen is drawn by the compositor. `payload/compositor/lumaglass`
+  (LumaHome.qml, status bar, widget cards, dock) renders the wallpaper,
+  glass chrome, clock, Home Assistant, news and weather widgets and the app
+  dock on top of the stock Home, which stays resident underneath as an
+  invisible placeholder. Cards, tiles and the status bar are single shader
+  quads that sample one cached blur of the wallpaper, so nothing runs per
+  frame while idle and focus and layer changes animate at 60 fps.
+- Navigation has two layers: the dock (default) and the widgets. Up from
+  the top dock row or Back moves to the cards; Up from a top card reaches
+  the status bar; Down from a bottom card returns to the dock. Back from
+  the widget layer is left to Home. The Magic Remote pointer focuses by
+  hover.
+- Remote keys reach the layer through `payload/keyfilter/lumaglass.js`,
+  registered by the tool in configd's `com.webos.surfacemanager.keyFilters`
+  (picked up live, no restart). A shadowed `controllers/StarfishKeyFilter
+  .qml` is never loaded on this firmware: module types resolve to
+  `/usr/lib/qt5/qml` whatever `QML2_IMPORT_PATH` says, only relative-file
+  references from an already-shadowed view follow the shadow.
+- Theme and layout live in `/var/lib/lumaglass/theme/{theme.json,
+  layout.json}` and reload live within 2 s of a change. Layout is a column
+  grid with explicit row heights (the reference pins 222/238/392 px);
+  every element, the dock included, is a widget entry with col/row/span/
+  rows. Widget types resolve to a built-in, a QML file in the theme
+  directory, or an installed pack under `/var/lib/lumaglass/widgets/
+  <packId>/pack.json`. Theme files the user has edited are never
+  overwritten by an update; untouched ones follow the payload.
+- Tile plates are derived in memory from each icon's edges (full-canvas
+  artwork gets a plate of its own edge colour drawn edge to edge, floating
+  artwork sits inset on a plate in its dominant hue); `theme.tiles.plates`
+  and `theme.tiles.icons` override per app id. The per-app appinfo/icon
+  rewrite and its `sam` restarts are gone; `apply` restores any files it
+  had touched.
+- The clock has an analog style (face drawn once, hands as rotation
+  transforms, ticking second hand, weekday/date/week strip beside it) next
+  to the digital one; `theme.clock.style` selects it.
+- Tile focus is depth only (lift, scale, deeper shadow, rim, sheen); `theme.focus.tileGlow` and `theme.focus.ambient` bring the accent halo and dock wash back.
+- Side safe margin is 64 px (was 96); the dock centres its tile grid and
+  shows the bottom fade only when it scrolls.
 
 ### Fixed
 
-- Home's app-edit page (long-press on an app) no longer shows through the
-  widgets: the news photo sat over the app tiles and the clock over the
-  header. Widgets are now composited only into Home's scaffold pixels, so
-  anything Home draws itself - tiles, focus rings, popups - is always on
-  top of them. While the edit page is up they are dropped altogether and
-  the wallpaper becomes a dim blur, leaving only LG's page. Home gives no
-  signal for that page, so it is detected on the GPU from the flat header
-  panel it paints, in the same frame.
-- `apply` restarts the compositor when the QML or wallpaper changed. It
-  only restarted a compositor that lacked the shadow module, so a set with
-  the mod already live kept running the previous QML until the next boot.
+- `apply` restarts the compositor when the QML, wallpaper or key-filter
+  script changed. It only restarted a compositor that lacked the shadow
+  module, so a set with the mod already live kept running the previous
+  QML until the next boot.
 
 ## [0.3.6] - 2026-09-14
 

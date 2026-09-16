@@ -50,15 +50,52 @@ If a future change needs a partition write, stop and reconsider the design.
 Two halves, one owner each.
 
 - Compositor: a full shadow copy of the `WebOSCompositor` QML module (318
-  files) at `/var/lib/lumaglass/qml`, with `StarfishFullscreenContainer.qml`
-  swapped for ours (glass, wallpaper, widgets). `surface-manager-daemon.service`
-  has `EnvironmentFile=-/var/systemd/system/env/surface-manager.env`; the mod
-  writes `QML2_IMPORT_PATH=/var/lib/lumaglass/qml:/usr/lib/qt5/qml` there.
-  `/usr` is a lowerdir-only overlay and can never be written.
+  files) at `/var/lib/lumaglass/qml`, with `views/fullscreen/
+  StarfishFullscreenContainer.qml` swapped for stock-plus-one-`Loader` and a
+  `lumaglass/` directory added beside it (LumaHome.qml, Glass, StatusBar,
+  Widget, Dock, Tile, the widgets, pre-rendered icons). `surface-manager-
+  daemon.service` has `EnvironmentFile=-/var/systemd/system/env/surface-
+  manager.env`; the mod writes `QML2_IMPORT_PATH=/var/lib/lumaglass/qml:/usr/
+  lib/qt5/qml` there. `/usr` is a lowerdir-only overlay and can never be
+  written. The Loader instantiates LumaHome above the Home surface while
+  Home is the container's app; the stock Flutter Home stays resident and
+  unseen underneath.
 - Home: `mount --bind /var/lib/lumaglass/assets` over
   `/usr/palm/applications/com.webos.app.home/data/flutter_assets/assets`
   (decluttered `home.xml`, strings, blank hero banners), then relaunch Home.
   A bind does not survive a reboot.
+
+Input: the compositor's `KeyFilter` sends remote keys straight to the focused
+Wayland window, so a QML item never sees them through QtQuick focus. The
+stock `StarfishKeyFilter.qml` builds its handler chain from the configd list
+`com.webos.surfacemanager.keyFilters` (`[{file, handler}]`, loaded through
+`StarfishKeyFilterLoader.qml` + `Qt.include`, re-read live on change). The
+tool appends `{file: /var/lib/lumaglass/keyfilter/lumaglass.js, handler:
+handleLumaHome}` at apply and boot-bind and removes it at revert. That script
+runs inside the compositor's QML engine, instantiates `LumaKeyBridge.qml` from
+the module and dispatches through the `LumaBus.js` pragma-library instance
+LumaHome registered with; it accepts a key only while Home is the active
+surface and LumaHome consumed it, everything else falls through to LG's
+chain. Pointer input is ordinary QtQuick mouse events (LumaHome sits above
+the surface item and swallows what no card or tile takes).
+
+Rendering: one `GaussianBlur` + `HueSaturation` of the wallpaper at half
+resolution, baked once into a `ShaderEffectSource`; every card, tile and the
+status bar is a single `ShaderEffect` quad that samples that texture at its
+own screen rect and draws tint, inset edge, sheen, rim and drop shadow from a
+rounded-rect signed distance. No layers, no per-frame effects; focus is a
+uniform plus a transform. Text is `NativeRendering` on integer positions and
+never inside a scaled item (the glass under it scales, the content does not).
+Icons are PNGs rendered by `generators/gen-icons.py` at display size (no
+SVG plugin on the set). Measured: idle 0 frames; the analog second hand's
+160 ms tick renders ~10 frames/s; a 150 ms focus change renders 9 frames,
+i.e. 60 fps.
+
+Theme: `/var/lib/lumaglass/theme/` (`theme.json`, `layout.json`, assets)
+polled every 2 s and applied live. `layout.grid.rows` is a count or an array
+of pixel heights; the shipped layout pins the mock's 222/238/392. `stage_theme`
+overwrites a theme file only while it still equals the last shipped copy
+(`.shipped-<file>` md5), so user edits survive updates.
 
 State lives in `/var/lib/lumaglass/`; the CLI is `tools/lumaglass`, the boot
 worker is `tools/autostart.sh`. `status` is the source of truth for what is
@@ -225,6 +262,27 @@ touching.
 - **Making the restart cheaper**: the 12–16 s from restart to pixels is the
   compositor's cold start plus Home's cold start (`surface-manager.sh` kills
   every client on restart), not padding.
+- **Shadowing `controllers/StarfishKeyFilter.qml`** to hook `preProcess`:
+  never loaded. A marker in the shadow copy stayed silent across restarts and
+  the log's own "Created a StarfishKeyFilterLoader object for /usr/lib/qt5/
+  qml/KeyFilters/..." line shows the stock file running every time. Types
+  reached through the module's qmldir resolve to `/usr/lib/qt5/qml` whatever
+  `QML2_IMPORT_PATH` says; only relative-file references from an already-
+  shadowed view (`Qt.createComponent("fullscreen/...")`, a Loader's relative
+  `source`) follow the shadow. The configd key-filter list is the hook.
+- **Stealing QtQuick activeFocus for the Home layer**: keys never arrive;
+  the KeyFilter delivers them to the Wayland window, not through the item
+  tree.
+- **A multi-row app grid from `home.xml`**: appList is a fixed single row and
+  a duplicated item is the same list.
+- **Rewriting each app's appinfo/icon for tile plates** (the `tileicons.js`
+  hack): worked, but touched app files and needed `sam` restarts; replaced by
+  in-memory plate derivation in `Dock.qml`.
+- **A 4K UI plane**: KMS accepts 3840x2160 but the OSD stream stays 1080p
+  (torn lines), +290 MB RAM, capture breaks; the UHD OSD mode is chosen from
+  boot `hwopt`, unreachable without a partition write. The OSD scaler index
+  (`/sys/module/lg1k/parameters/gfx_o22_scaler_index`) changes nothing
+  visible (0 breaks output).
 
 ## The other mod on this set
 
