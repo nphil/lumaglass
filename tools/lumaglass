@@ -55,6 +55,7 @@ LUMA_SRC="$APPDIR/payload/compositor/lumaglass"
 FONTS_SRC="$APPDIR/payload/fonts"
 THEME_SRC="$APPDIR/payload/theme"
 KEYFILTER_SRC="$APPDIR/payload/keyfilter/lumaglass.js"
+KEYFILTER_TOOL="$APPDIR/tools/keyfilter.py"
 LUMA_STAGE="$STATE/luma"
 FONTS_DIR="$STATE/fonts"
 THEME_DIR="$STATE/theme"
@@ -508,10 +509,15 @@ stage_compositor() {
 }
 
 tree_fp() {
-  # Content hash of a directory (or a file): every file's bytes in path order,
-  # so a one-byte QML edit changes it and a rename does too.
+  # Content hash of a directory (or a file): every file's bytes in path order
+  # relative to the argument, so a one-byte QML edit changes it and a rename
+  # inside does too, while two copies under different names compare equal.
   [ -e "$1" ] || { printf 'missing'; return 0; }
-  ( cd "$(dirname "$1")" && find "$(basename "$1")" -type f | sort | while IFS= read -r f; do printf '%s\n' "$f"; cat "$f"; done ) 2>/dev/null | md5sum | cut -c1-32
+  if [ -d "$1" ]; then
+    ( cd "$1" && find . -type f | sort | while IFS= read -r f; do printf '%s\n' "$f"; cat "$f"; done ) 2>/dev/null | md5sum | cut -c1-32
+  else
+    md5sum < "$1" 2>/dev/null | cut -c1-32
+  fi
 }
 
 stage_luma() {
@@ -561,27 +567,20 @@ keyfilter_set() {
   # remote keys inside the compositor: a shadowed controllers/StarfishKeyFilter
   # .qml is never loaded on this firmware (module types resolve to /usr/lib
   # regardless of QML2_IMPORT_PATH; only relative-file references from an
-  # already-shadowed view pick up the override). Our entry goes last so the
-  # stock handlers register first whatever happens to ours.
+  # already-shadowed view pick up the override). Our entry goes first: the
+  # stock handleSystemKeys answers Back with NotAccepted (deliver to the app
+  # and stop) while Home is up, so a later entry never sees Back at all.
+  # Ours returns NextPolicy for everything it does not consume, so the stock
+  # chain runs unchanged behind it.
+  #
+  # luna-send prints nothing when its stdin is a pipe, so the helper is a
+  # file and runs with stdin from /dev/null, never a heredoc.
   mode="$1"
   if [ "$mode" = add ]; then
     mkdir -p "$KEYFILTER_DIR" 2>/dev/null || return 1
     cp -f "$KEYFILTER_SRC" "$KEYFILTER_DIR/lumaglass.js" 2>/dev/null || return 1
   fi
-  python3 - "$mode" "$KEYFILTER_HANDLER" "$KEYFILTER_DIR/lumaglass.js" <<'PY' 2>>"$LOGFILE"
-import json, subprocess, sys
-mode, handler, path = sys.argv[1:4]
-name = "com.webos.surfacemanager.keyFilters"
-out = subprocess.run(["luna-send", "-n", "1", "luna://com.webos.service.config/getConfigs",
-                      json.dumps({"configNames": [name]})], capture_output=True, text=True).stdout
-lst = json.loads(out)["configs"][name]
-lst = [e for e in lst if e.get("handler") != handler]
-if mode == "add":
-    lst.append({"handler": handler, "file": path})
-r = subprocess.run(["luna-send", "-n", "1", "luna://com.webos.service.config/setConfigs",
-                    json.dumps({"configs": {name: lst}})], capture_output=True, text=True).stdout
-sys.exit(0 if '"returnValue":true' in r else 1)
-PY
+  python3 "$KEYFILTER_TOOL" "$mode" "$KEYFILTER_HANDLER" "$KEYFILTER_DIR/lumaglass.js" < /dev/null 2>>"$LOGFILE"
 }
 
 staged_hash() {

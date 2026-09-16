@@ -52,6 +52,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Back closes the notifications popover and, from the dock, moves to the
+  widgets. The key filter is registered first in configd's list: the stock
+  `handleSystemKeys` answers Back with NotAccepted while Home is up, which
+  ends the chain before a later entry.
+- `apply` no longer restarts the compositor on every run: the staged Home
+  QML tree is hashed by paths relative to the tree, so `luma.next` and
+  `luma` compare equal when their contents do.
 - `apply` restarts the compositor when the QML, wallpaper or key-filter
   script changed. It only restarted a compositor that lacked the shadow
   module, so a set with the mod already live kept running the previous
