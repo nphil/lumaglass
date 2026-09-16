@@ -206,6 +206,18 @@ Item {
     // ============================================================= wallpaper + one cached blur
     property string wallpaperFit: (layout.background && layout.background.wallpaperFit) || "1:1"
     Rectangle { anchors.fill: parent; z: -3; color: (layout.background && layout.background.color) || "#0b0910" }
+    Rectangle {
+        // theme.<mat>.scrim: 3 stops at 0 / 55 / 100 %. Drawn by the live wallpaper's shader
+        // while that is on, so the screen carries one full-screen quad, not two.
+        anchors.fill: parent
+        z: -1
+        visible: !liveWall.visible
+        gradient: Gradient {
+            GradientStop { position: 0.0; color: root.scrimColor((root.mat.scrim || [0, 0, 0])[0]) }
+            GradientStop { position: 0.55; color: root.scrimColor((root.mat.scrim || [0, 0, 0])[1]) }
+            GradientStop { position: 1.0; color: root.scrimColor((root.mat.scrim || [0, 0, 0])[2]) }
+        }
+    }
     Image {
         id: wallpaperImg
         anchors.fill: parent
