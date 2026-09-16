@@ -43,6 +43,17 @@ Item {
     property int gridTop: scrollable ? Math.max(padY, 64) : Math.round((height - (totalRows * tileSize + (totalRows - 1) * gap)) / 2)
 
     property var points: []
+    // The Repeater's model: a ListModel so a rearrange is a move() and the existing delegates
+    // animate to their new slots (a replaced JS array would re-create them all).
+    ListModel { id: tileModel }
+    function syncModel() {
+        tileModel.clear()
+        for (var i = 0; i < points.length; i++) tileModel.append(rowFor(points[i]))
+    }
+    function rowFor(p) {
+        return { id: p.id, launchPointId: p.launchPointId, title: p.title, paramsJson: JSON.stringify(p.params || {}),
+                 iconUrl: p.iconUrl, plate: String(p.plate), floating: p.floating, neutralPlate: p.neutralPlate, unmovable: p.unmovable }
+    }
     property var plateCache: ({})
     property var plateQueue: []
     property bool sampling: false
@@ -54,12 +65,16 @@ Item {
         if (/^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(p)) return p
         return "file://" + p
     }
+    // Launch points come from homelaunchpoints (the user-ordered list Home itself shows,
+    // with `unmovable`); applicationManager's list is the fallback until it answers.
+    property var hlpList: null
     function refresh() {
-        var list = []
-        try {
-            var res = JSON.parse(LS.applicationManager.launchPointsList)
-            list = (res.launchPoints || []).filter(function(p) { return !p.hidden })
-        } catch (e) { console.warn("[Dock] launchPointsList parse failed: " + e); return }
+        var list = hlpList
+        if (!list) {
+            try { list = (JSON.parse(LS.applicationManager.launchPointsList).launchPoints || []) }
+            catch (e) { console.warn("[Dock] launchPointsList parse failed: " + e); return }
+        }
+        list = list.filter(function(p) { return !p.hidden })
         var neutral = ["#ffffff", "#fff", "#000000", "#000", "#060606", "#1e1e1e"]
         var overrides = (theme.tiles && theme.tiles.icons) || {}
         var plates = (theme.tiles && theme.tiles.plates) || {}
@@ -68,10 +83,23 @@ Item {
             var forced = plates[p.id] ? String(plates[p.id]).toLowerCase() : ""
             var icon = overrides[p.id] ? dock.themeIcon(overrides[p.id]) : dock.iconUrl(iconFor(p))
             return { id: p.id, launchPointId: p.launchPointId, title: p.title || p.id, params: p.params || {},
-                     iconUrl: icon, plate: forced || raw, forced: forced !== "", floating: false, neutralPlate: !forced && neutral.indexOf(raw) >= 0 }
+                     iconUrl: icon, plate: forced || raw, forced: forced !== "", floating: false,
+                     neutralPlate: !forced && neutral.indexOf(raw) >= 0, unmovable: !!p.unmovable }
         })
+        syncModel()
         for (var i = 0; i < points.length; i++) queueSample(points[i].iconUrl, i)
         if (row * cols + col >= points.length) { row = 0; col = 0; scrollRow = 0 }
+    }
+    Service {
+        id: hlp
+        appId: LS.appId
+        onResponse: {
+            try {
+                var msg = JSON.parse(payload)
+                if (msg.launchPoints && msg.launchPoints.length) { dock.hlpList = msg.launchPoints; if (!dock.moving) dock.refresh() }
+            } catch (e) {}
+        }
+        Component.onCompleted: call("luna://com.webos.service.homelaunchpoints", "/listLaunchPoints", JSON.stringify({ subscribe: true }))
     }
     property string themeDirUrl: "file:///var/lib/lumaglass/theme/"
     function themeIcon(p) {
@@ -80,7 +108,7 @@ Item {
         return themeDirUrl + p
     }
 
-    Connections { target: LS.applicationManager; onLaunchPointsListChanged: dock.refresh() }
+    Connections { target: LS.applicationManager; onLaunchPointsListChanged: if (!dock.hlpList) dock.refresh() }
     onThemeChanged: refresh()   // theme.json lands after first paint; plates/icon overrides live there
     Component.onCompleted: dock.refresh()
 
@@ -107,8 +135,9 @@ Item {
         var copy = points.slice()
         var plate = p.forced ? p.plate : (p.neutralPlate || result.floating) ? result.color : p.plate
         copy[index] = { id: p.id, launchPointId: p.launchPointId, title: p.title, params: p.params, iconUrl: p.iconUrl,
-                        plate: plate, forced: p.forced, floating: result.floating, neutralPlate: p.neutralPlate }
+                        plate: plate, forced: p.forced, floating: result.floating, neutralPlate: p.neutralPlate, unmovable: p.unmovable }
         points = copy
+        if (index < tileModel.count) { tileModel.setProperty(index, "plate", String(plate)); tileModel.setProperty(index, "floating", result.floating) }
     }
     function analyzeEdges(data, w, h) {
         var sumA = 0, n = 0, sumR = 0, sumG = 0, sumB = 0
@@ -254,19 +283,24 @@ Item {
             Behavior on y { enabled: !dock.motionReduced; NumberAnimation { duration: dock.scrollMs; easing.type: dock.scrollEasing } }
     
             Repeater {
-                model: dock.points
+                model: tileModel
                 delegate: Tile {
                     x: (index % dock.cols) * (dock.tileSize + dock.gap)
                     y: Math.floor(index / dock.cols) * (dock.tileSize + dock.gap)
+                    // while rearranging every tile eases to its slot: the held one glides quickly,
+                    // displaced neighbours take a little longer so the gap visibly closes behind it
+                    Behavior on x { enabled: dock.moving; NumberAnimation { duration: moving ? 120 : 220; easing.type: Easing.OutCubic } }
+                    Behavior on y { enabled: dock.moving; NumberAnimation { duration: moving ? 120 : 220; easing.type: Easing.OutCubic } }
+                    moving: dock.moving && index === (dock.row * dock.cols + dock.col)
                     size: dock.tileSize
                     tileRadius: dock.theme.tileRadius || 22
                     inset: (dock.theme.tiles && dock.theme.tiles.inset) || 19
                     ink: dock.mat.ink
                     isLight: dock.isLight
-                    launchPoint: modelData
-                    plate: modelData.plate
-                    floating: modelData.floating
-                    accent: dock.accentFor(modelData)
+                    launchPoint: ({ title: model.title, iconUrl: model.iconUrl })
+                    plate: model.plate
+                    floating: model.floating
+                    accent: dock.accentFor({ neutralPlate: model.neutralPlate, plate: model.plate, title: model.title, id: model.id })
                     focused: dock.focusedLayer && index === (dock.row * dock.cols + dock.col)
                     focusScale: (dock.theme.focus && dock.theme.focus.tileScale) || 1.12
                     focusMs: dock.focusMs
@@ -274,9 +308,10 @@ Item {
                     labelMs: dock.labelMs
                     motionReduced: dock.motionReduced
                     labelAbove: Math.floor(index / dock.cols) === dock.scrollRow
-                glowStrength: (dock.theme.focus && dock.theme.focus.tileGlow) || 0
+                    glowStrength: (dock.theme.focus && dock.theme.focus.tileGlow) || 0
                     onHoverFocus: { dock.row = Math.floor(index / dock.cols); dock.col = index % dock.cols; dock.ensureRowVisible() }
-                    onActivated: { dock.row = Math.floor(index / dock.cols); dock.col = index % dock.cols; dock.activate() }
+                    onActivated: { dock.row = Math.floor(index / dock.cols); dock.col = index % dock.cols; if (dock.moving) dock.endMove(); else dock.activate() }
+                    onHoldActivated: { dock.row = Math.floor(index / dock.cols); dock.col = index % dock.cols; dock.beginMove() }
                 }
             }
         }
@@ -314,21 +349,65 @@ Item {
             }"
     }
 
+    // ---------------------------------------------------------------- rearrange
+    // Hold OK on a tile to pick it up; Left/Right/Up/Down swap it with the neighbour in that
+    // direction (the neighbour slides across); OK or Back drops it. The final order is
+    // written through homelaunchpoints/moveLaunchPoint, the same list stock Home reads, so
+    // it persists and both homes agree. Position 0 (LG's Apps) is unmovable.
+    property bool moving: false
+    property int moveOrigin: -1
+    function beginMove() {
+        var i = row * cols + col
+        if (!points[i] || points[i].unmovable) return
+        moving = true
+        moveOrigin = i
+    }
+    function endMove() {
+        if (!moving) return
+        moving = false
+        var i = row * cols + col
+        var p = points[i]
+        if (p && i !== moveOrigin)
+            LS.adhoc.call("luna://com.webos.service.homelaunchpoints", "/moveLaunchPoint",
+                          JSON.stringify({ launchPointId: p.launchPointId, position: i }))
+        moveOrigin = -1
+    }
+    function cancelMove() {
+        if (!moving) return
+        moving = false
+        var i = row * cols + col
+        if (i !== moveOrigin && moveOrigin >= 0) {
+            var copy = points.slice(); var p = copy.splice(i, 1)[0]; copy.splice(moveOrigin, 0, p); points = copy
+            tileModel.move(i, moveOrigin, 1)
+            row = Math.floor(moveOrigin / cols); col = moveOrigin % cols; ensureRowVisible()
+        }
+        moveOrigin = -1
+    }
+    function swapTo(j) {
+        var i = row * cols + col
+        if (j < 0 || j >= points.length || j === i || points[j].unmovable) return
+        var copy = points.slice(); var p = copy.splice(i, 1)[0]; copy.splice(j, 0, p); points = copy
+        tileModel.move(i, j, 1)
+        row = Math.floor(j / cols); col = j % cols; ensureRowVisible()
+    }
+
     // ---------------------------------------------------------------- navigation
     function ensureRowVisible() {
         if (row < scrollRow) scrollRow = row
         else if (row > scrollRow + visibleRows - 1) scrollRow = row - visibleRows + 1
         scrollRow = Math.max(0, Math.min(scrollRow, Math.max(0, totalRows - visibleRows)))
     }
-    function moveLeft() { if (col > 0) col-- }
-    function moveRight() { if (col < cols - 1 && (row * cols + col + 1) < points.length) col++ }
+    function moveLeft() { if (moving) { swapTo(row * cols + col - 1); return } if (col > 0) col-- }
+    function moveRight() { if (moving) { swapTo(row * cols + col + 1); return } if (col < cols - 1 && (row * cols + col + 1) < points.length) col++ }
     function moveUp() {
+        if (moving) { swapTo(row * cols + col - cols); return true }
         if (row === 0) return false
         row--
         ensureRowVisible()
         return true
     }
     function moveDown() {
+        if (moving) { swapTo(Math.min(points.length - 1, row * cols + col + cols)); return }
         if ((row + 1) * cols >= points.length) return
         row++
         if (row * cols + col >= points.length) col = (points.length - 1) - row * cols
@@ -337,7 +416,7 @@ Item {
     function activate() {
         var p = points[row * cols + col]
         if (!p) return
-        LS.adhoc.call("luna://com.webos.applicationManager", "/launch", JSON.stringify({ id: p.id, params: p.params }))
+        LS.adhoc.call("luna://com.webos.applicationManager", "/launch", JSON.stringify({ id: p.id, params: p.params || {} }))
     }
     function focusedCenterX() { return originX + focusCenter().x }
 }

@@ -1,4 +1,4 @@
-import QtQuick 2.4
+import QtQuick 2.9
 
 // One dock tile: plate, icon, inset edge, shadow, accent glow, top rim and sheen are a single
 // shader quad (icon sampled from an offscreen mipmapped Image), so a tile is one draw call
@@ -25,15 +25,17 @@ Item {
     property bool motionReduced: false
     property bool labelAbove: false
     property real glowStrength: 0      // accent halo around the focused tile; 0 = depth only
+    property bool moving: false        // picked up for rearranging: higher lift and scale
 
     signal activated()
+    signal holdActivated()
     signal hoverFocus()
 
     width: size
     height: size
-    z: focused ? 3 : 1
+    z: moving ? 4 : focused ? 3 : 1
 
-    property real f: focused ? 1 : 0
+    property real f: moving ? 1.6 : focused ? 1 : 0
     Behavior on f { enabled: !tile.motionReduced; NumberAnimation { duration: tile.focusMs; easing.type: tile.focusEasing } }
 
     Image {
@@ -68,7 +70,7 @@ Item {
         }
         property vector4d plateC: Qt.vector4d(tile.plate.r, tile.plate.g, tile.plate.b, 1)
         property vector4d accentC: Qt.vector4d(tile.accent.r, tile.accent.g, tile.accent.b, 1)
-        property real f: tile.f
+        property real f: Math.min(1, tile.f)   // shading saturates at focus; extra lift is transform only
         property real glowA: tile.glowStrength
 
         fragmentShader: "
@@ -162,6 +164,10 @@ Item {
         anchors.fill: parent
         hoverEnabled: true
         onEntered: tile.hoverFocus()
-        onClicked: tile.activated()
+        onClicked: if (!holdFired) tile.activated()
+        property bool holdFired: false
+        onPressed: holdFired = false
+        onPressAndHold: { holdFired = true; tile.holdActivated() }
+        pressAndHoldInterval: 600
     }
 }

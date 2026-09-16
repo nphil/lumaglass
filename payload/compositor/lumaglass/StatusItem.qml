@@ -9,6 +9,8 @@ Item {
 
     property string kind: "generic"     // profile | notifications | settings | search | generic
     property string label: ""
+    property string initial: ""
+    property color avatarColor: "#7360E7"
     property int badge: 0
     property bool focused: false
     property var mat: ({ ink: "#F2EFF6", ink2: "#A8F2EFF6" })
@@ -54,12 +56,12 @@ Item {
             radius: 24
             antialiasing: true
             gradient: Gradient {
-                GradientStop { position: 0.0; color: "#8e7cf3" }
-                GradientStop { position: 1.0; color: "#5b46d8" }
+                GradientStop { position: 0.0; color: Qt.lighter(item.avatarColor, 1.25) }
+                GradientStop { position: 1.0; color: Qt.darker(item.avatarColor, 1.15) }
             }
             Text {
                 x: Math.round((48 - implicitWidth) / 2); y: Math.round((48 - implicitHeight) / 2)
-                text: item.label ? item.label.charAt(0).toUpperCase() : "?"
+                text: item.initial || (item.label ? item.label.charAt(0).toUpperCase() : "?")
                 color: "#ffffff"
                 font.family: "Manrope"; font.weight: Font.Bold; font.pixelSize: 22
                 renderType: Text.NativeRendering

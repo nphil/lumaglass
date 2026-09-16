@@ -43,6 +43,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and `theme.tiles.icons` override per app id. The per-app appinfo/icon
   rewrite and its `sam` restarts are gone; `apply` restores any files it
   had touched.
+- Dock tiles can be rearranged: hold OK (or press-and-hold with the pointer)
+  on a tile to pick it up, Left/Right/Up/Down swap it with the neighbour
+  (which slides across), OK drops it and Back puts it back. The order is
+  written through `homelaunchpoints/moveLaunchPoint`, the list stock Home
+  reads, so it persists and both homes agree. LG's Apps tile is unmovable.
+- The profile button shows the LG account (nickname, initial and avatar
+  colour from `accountmanager/getLoginUserData`) and opens a popover with
+  the account and a "Manage LG account" row that launches the LG Account
+  app. Popovers take Up/Down/OK, and Back closes them.
 - The clock has an analog style (face drawn once, hands as rotation
   transforms, ticking second hand, weekday/date/week strip beside it) next
   to the digital one; `theme.clock.style` selects it.

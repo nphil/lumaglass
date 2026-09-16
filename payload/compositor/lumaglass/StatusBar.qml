@@ -4,8 +4,10 @@ import WebOSServices 1.0
 
 // Status bar: a 60px glass pill (padding 0 10 0 6, 6px between buttons) with items built from
 // layout.statusBar.left/right through a small type registry. Unknown types render a generic
-// glyph so a bad layout entry never breaks the bar. "notifications" opens a glass popover
-// under its button; "settings" and "search" launch their apps.
+// glyph so a bad layout entry never breaks the bar. "profile" and "notifications" open a
+// glass popover under their button (rows navigable with Up/Down, OK activates, Back closes);
+// "settings" and "search" launch their apps. Profile data comes from the LG account
+// (accountmanager/getLoginUserData with serviceName LGE): nickname, initial, avatar colour.
 Item {
     id: bar
 
@@ -20,7 +22,9 @@ Item {
     property int cardMs: 180
     property int cardEasing: Easing.OutCubic
     property int layerMs: 220
-    property string profileName: "Nate"
+    property string profileName: account.nick
+    property string profileInitial: account.initial
+    property color profileColor: account.bg
 
     signal requestOpenPopover(int index)
     signal requestClosePopover()
@@ -28,7 +32,7 @@ Item {
 
     function activate(index) {
         var type = items[index] ? items[index].type : ""
-        if (type === "notifications") { bar.requestOpenPopover(index); return }
+        if (type === "notifications" || type === "profile") { bar.requestOpenPopover(index); return }
         if (type === "settings") LS.adhoc.call("luna://com.webos.applicationManager", "/launch", JSON.stringify({ id: "com.palm.app.settings" }))
         else if (type === "search") LS.adhoc.call("luna://com.webos.applicationManager", "/launch", JSON.stringify({ id: "com.webos.app.voice" }))
     }
@@ -60,6 +64,8 @@ Item {
             delegate: StatusItem {
                 kind: modelData.type
                 label: modelData.type === "profile" ? bar.profileName : ""
+                initial: bar.profileInitial
+                avatarColor: bar.profileColor
                 badge: modelData.type === "notifications" ? notifSvc.badgeCount : 0
                 mat: bar.mat
                 isLight: bar.isLight
@@ -82,6 +88,9 @@ Item {
             model: bar.items.slice(bar.leftCount)
             delegate: StatusItem {
                 kind: modelData.type
+                label: modelData.type === "profile" ? bar.profileName : ""
+                initial: bar.profileInitial
+                avatarColor: bar.profileColor
                 badge: modelData.type === "notifications" ? notifSvc.badgeCount : 0
                 mat: bar.mat
                 isLight: bar.isLight
@@ -95,11 +104,36 @@ Item {
         }
     }
 
+    // LG account: nickname, initial and avatar colour as Home shows them. Subscribed, so a
+    // sign-in or nickname change lands without a restart.
+    Service {
+        id: account
+        appId: LS.appId
+        property string nick: ""
+        property string initial: ""
+        property color bg: "#7360E7"
+        property string email: ""
+        property bool signedIn: false
+        onResponse: {
+            try {
+                var msg = JSON.parse(payload)
+                var u = msg.userData
+                if (!u) return
+                signedIn = !!u.isLogin
+                nick = u.profileNick || ""
+                initial = u.iconNick || (nick ? nick.charAt(0).toUpperCase() : "")
+                email = u.id || ""
+                if (u.profileBg) bg = u.profileBg
+            } catch (e) {}
+        }
+        Component.onCompleted: call("luna://com.webos.service.accountmanager", "/getLoginUserData", JSON.stringify({ serviceName: "LGE", subscribe: true }))
+    }
+
     // Toasts are subscribe-only on this firmware (no backlog), so the badge counts what has
     // arrived since Home was drawn.
     Service {
         id: notifSvc
-        appId: "org.nphil.lumaglass"
+        appId: LS.appId
         property var recent: []
         property int badgeCount: recent.length
         onResponse: {
@@ -111,19 +145,41 @@ Item {
         Component.onCompleted: call("luna://com.webos.notification", "/getToastNotification", JSON.stringify({ subscribe: true }))
     }
 
+    // ---- popover: one glass panel under the focused button; content per item type ----
     property bool popoverOpen: false
-    onRequestOpenPopover: popoverOpen = true
+    property string popoverType: ""
+    property int popoverIndex: 0
+    property var popoverRows: popoverType === "profile"
+        ? [ { label: account.signedIn ? "Manage LG account" : "Sign in to LG account", action: "membership" } ]
+        : []
+    onRequestOpenPopover: { popoverType = items[index] ? items[index].type : ""; popoverIndex = 0; popoverOpen = true }
     onRequestClosePopover: popoverOpen = false
+    function popoverMove(d) {
+        if (!popoverRows.length) return
+        popoverIndex = Math.max(0, Math.min(popoverRows.length - 1, popoverIndex + d))
+    }
+    function popoverActivate() {
+        var r = popoverRows[popoverIndex]
+        if (!r) return
+        if (r.action === "membership") LS.adhoc.call("luna://com.webos.applicationManager", "/launch", JSON.stringify({ id: "com.webos.app.membership" }))
+        bar.requestClosePopover()
+    }
 
     Item {
         id: popover
         width: 380
-        height: Math.max(120, list.implicitHeight + 40)
+        height: content.height + 40
         y: bar.height + 8 + (bar.popoverOpen ? 0 : -8)
         x: {
-            var it = bar.itemAt(bar.focusedIndex)
-            var cx = it ? it.parent.x + it.x + 24 : bar.width / 2
-            return Math.round(Math.min(bar.width - width, Math.max(0, cx - width / 2)))
+            // re-evaluated on every open: itemAt() is a function, not a dependency, and the
+            // Repeater's items do not exist when this binding first runs
+            var open = bar.popoverOpen, idx = bar.focusedIndex
+            var it = bar.itemAt(idx)
+            if (!it) return Math.round((bar.width - width) / 2)
+            var left = it.parent.x + it.x
+            // left-side items hang from their button's left edge, right-side from the right edge
+            var x = idx < bar.leftCount ? left : left + 48 - width
+            return Math.round(Math.min(bar.width - width, Math.max(0, x)))
         }
         opacity: bar.popoverOpen ? 1 : 0
         visible: opacity > 0.01
@@ -137,33 +193,112 @@ Item {
             screenX: bar.x + popover.x; screenY: bar.y + popover.y; screenW: popover.width; screenH: popover.height
             backdrop: bar.backdrop
         }
-        Column {
-            id: list
+        Item {
+            id: content
             x: 20; y: 20
             width: parent.width - 40
-            spacing: 12
-            Text {
-                text: "Notifications"
-                color: bar.mat.ink
-                font.family: "Manrope"; font.weight: Font.DemiBold; font.pixelSize: 22
-                renderType: Text.NativeRendering
-            }
-            Text {
-                visible: notifSvc.recent.length === 0
-                text: "No notifications"
-                color: bar.mat.ink2
-                font.family: "Manrope"; font.weight: Font.Medium; font.pixelSize: 20
-                renderType: Text.NativeRendering
-            }
-            Repeater {
-                model: notifSvc.recent
-                delegate: Text {
-                    width: list.width
-                    text: modelData.text
+            height: bar.popoverType === "profile" ? profileBody.height : notifBody.height
+
+            // -- profile: avatar, nickname, email, then action rows
+            Item {
+                id: profileBody
+                visible: bar.popoverType === "profile"
+                width: parent.width
+                height: 64 + 12 + bar.popoverRows.length * 52
+                Rectangle {
+                    x: 0; y: 0; width: 64; height: 64; radius: 32
+                    antialiasing: true
+                    gradient: Gradient {
+                        GradientStop { position: 0.0; color: Qt.lighter(account.bg, 1.25) }
+                        GradientStop { position: 1.0; color: Qt.darker(account.bg, 1.15) }
+                    }
+                    Text {
+                        x: Math.round((64 - implicitWidth) / 2); y: Math.round((64 - implicitHeight) / 2)
+                        text: account.initial || "?"
+                        color: "#ffffff"
+                        font.family: "Manrope"; font.weight: Font.Bold; font.pixelSize: 28
+                        renderType: Text.NativeRendering
+                    }
+                }
+                Text {
+                    x: 80; y: 8
+                    width: parent.width - 80
+                    elide: Text.ElideRight
+                    text: account.signedIn ? (account.nick || "LG account") : "Not signed in"
                     color: bar.mat.ink
-                    wrapMode: Text.WordWrap
+                    font.family: "Manrope"; font.weight: Font.DemiBold; font.pixelSize: 24
+                    renderType: Text.NativeRendering
+                }
+                Text {
+                    x: 80; y: 38
+                    width: parent.width - 80
+                    elide: Text.ElideRight
+                    text: account.email
+                    color: bar.mat.ink2
+                    font.family: "Manrope"; font.weight: Font.Medium; font.pixelSize: 18
+                    renderType: Text.NativeRendering
+                }
+                Repeater {
+                    model: bar.popoverRows
+                    delegate: Item {
+                        x: 0; y: 76 + index * 52
+                        width: profileBody.width; height: 44
+                        Rectangle {
+                            anchors.fill: parent
+                            radius: 12
+                            antialiasing: true
+                            color: bar.isLight ? "#8cffffff" : "#12ffffff"
+                            border.width: 1
+                            border.color: bar.isLight ? "#e6ffffff" : "#14ffffff"
+                            opacity: bar.popoverIndex === index ? 1 : 0
+                            Behavior on opacity { NumberAnimation { duration: 120 } }
+                        }
+                        Text {
+                            x: 14; y: Math.round((44 - implicitHeight) / 2)
+                            text: modelData.label
+                            color: bar.popoverIndex === index ? bar.mat.ink : bar.mat.ink2
+                            font.family: "Manrope"; font.weight: Font.DemiBold; font.pixelSize: 20
+                            renderType: Text.NativeRendering
+                        }
+                        MouseArea {
+                            anchors.fill: parent
+                            hoverEnabled: true
+                            onEntered: bar.popoverIndex = index
+                            onClicked: { bar.popoverIndex = index; bar.popoverActivate() }
+                        }
+                    }
+                }
+            }
+
+            // -- notifications
+            Column {
+                id: notifBody
+                visible: bar.popoverType === "notifications"
+                width: parent.width
+                spacing: 12
+                Text {
+                    text: "Notifications"
+                    color: bar.mat.ink
+                    font.family: "Manrope"; font.weight: Font.DemiBold; font.pixelSize: 22
+                    renderType: Text.NativeRendering
+                }
+                Text {
+                    visible: notifSvc.recent.length === 0
+                    text: "No notifications"
+                    color: bar.mat.ink2
                     font.family: "Manrope"; font.weight: Font.Medium; font.pixelSize: 20
                     renderType: Text.NativeRendering
+                }
+                Repeater {
+                    model: notifSvc.recent
+                    delegate: Text {
+                        width: notifBody.width
+                        text: modelData.text
+                        color: bar.mat.ink
+                        wrapMode: Text.WordWrap
+                        font.family: "Manrope"; font.weight: Font.Medium; font.pixelSize: 20
+                        renderType: Text.NativeRendering
+                    }
                 }
             }
         }

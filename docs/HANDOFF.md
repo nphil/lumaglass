@@ -97,6 +97,18 @@ of pixel heights; the shipped layout pins the mock's 222/238/392. `stage_theme`
 overwrites a theme file only while it still equals the last shipped copy
 (`.shipped-<file>` md5), so user edits survive updates.
 
+Luna from the layer: `Service { appId: LS.appId }` (the compositor's own
+identity; a made-up appId gets no reply, silently). Account data:
+`accountmanager/getLoginUserData {serviceName:"LGE", subscribe:true}`
+(`profileNick`, `iconNick`, `profileBg`, `id`). Launch-point order:
+`homelaunchpoints/listLaunchPoints` (subscribe) carries `unmovable`;
+`moveLaunchPoint {launchPointId, position}` writes it.
+
+Not built yet: widget rearrange/resize (hold on a card, move/snap on the
+grid with animated repositioning, span/rows changes written back to
+layout.json). The dock's move mode is the pattern to extend: pick up on
+hold, ListModel.move so existing delegates animate, persist on drop.
+
 State lives in `/var/lib/lumaglass/`; the CLI is `tools/lumaglass`, the boot
 worker is `tools/autostart.sh`. `status` is the source of truth for what is
 live.

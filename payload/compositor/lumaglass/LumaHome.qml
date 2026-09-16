@@ -270,7 +270,7 @@ Item {
     property var statusItems: (layout.statusBar.left || []).concat(layout.statusBar.right || [])
     property bool popoverOpen: focusLayer === "popover"
 
-    onHostActiveChanged: if (hostActive) { focusLayer = "dock"; statusBarItem.popoverOpen = false }
+    onHostActiveChanged: if (hostActive) { focusLayer = "dock"; statusBarItem.requestClosePopover() }
 
     function widgetRectById(id) {
         var i = widgetIndexById(id)
@@ -328,14 +328,48 @@ Item {
 
     // Returns true when the key is consumed; false lets the stock chain deliver it to Home's
     // own surface (Back from the widget layer closes Home exactly as stock does).
+    // OK is decided on release: a press held past holdMs (no release yet) picks a dock tile
+    // up for rearranging; a shorter press activates. Auto-repeat presses are ignored.
+    property int holdMs: 600
+    property bool okDown: false
+    property bool okHeld: false
+    Timer {
+        id: holdTimer
+        interval: root.holdMs
+        onTriggered: {
+            if (!root.okDown) return
+            root.okHeld = true
+            var d = dockLoader.item
+            if (root.focusLayer === "dock" && d && !d.moving) d.beginMove()
+        }
+    }
     function key(k, pressed, autoRepeat, deviceId) {
         var dir = directionFor(k)
         if (!dir || !hostActive) return false
+        if (dir === "ok") {
+            if (pressed) {
+                if (autoRepeat || okDown) return true
+                okDown = true; okHeld = false; holdTimer.restart()
+                return true
+            }
+            holdTimer.stop()
+            var wasHeld = okHeld
+            okDown = false; okHeld = false
+            if (wasHeld) return true
+            return keyAction("ok")
+        }
         if (!pressed) return true
+        if (autoRepeat && dir === "back") return true
+        return keyAction(dir)
+    }
+    function keyAction(dir) {
         var d = dockLoader.item
 
         if (focusLayer === "popover") {
-            if (dir === "back" || dir === "ok") { statusBarItem.popoverOpen = false; focusLayer = "statusbar" }
+            if (dir === "back") { statusBarItem.requestClosePopover(); focusLayer = "statusbar" }
+            else if (dir === "ok") { statusBarItem.popoverActivate(); if (!statusBarItem.popoverOpen) focusLayer = "statusbar" }
+            else if (dir === "up") statusBarItem.popoverMove(-1)
+            else if (dir === "down") statusBarItem.popoverMove(1)
             return true
         }
         if (focusLayer === "dock") {
@@ -344,8 +378,8 @@ Item {
             else if (dir === "right") d.moveRight()
             else if (dir === "down") d.moveDown()
             else if (dir === "up") { if (!d.moveUp()) { widgetFocusId = lowestWidgetByX(d.focusedCenterX()); focusLayer = "widgets" } }
-            else if (dir === "back") { widgetFocusId = lowestWidgetByX(d.focusedCenterX()); focusLayer = "widgets" }
-            else if (dir === "ok") d.activate()
+            else if (dir === "back") { if (d.moving) d.cancelMove(); else { widgetFocusId = lowestWidgetByX(d.focusedCenterX()); focusLayer = "widgets" } }
+            else if (dir === "ok") { if (d.moving) d.endMove(); else d.activate() }
             return true
         }
         if (focusLayer === "widgets") {
