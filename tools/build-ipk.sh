@@ -33,12 +33,14 @@ assets/splash.png
 tools/lumaglass
 tools/autostart.sh
 payload/compositor/StarfishFullscreenContainer.qml
+payload/compositor/lumaglass/LumaHome.qml
+payload/keyfilter/lumaglass.js
 payload/home/home.xml
 payload/home/en.json.sed
-payload/wallpaper/bg_hd.png
-payload/wallpaper/bg_2k.png
-payload/wallpaper/bg_4k.png
 payload/wallpaper/wall_1080.png
+payload/theme/theme.json
+payload/theme/layout.json
+payload/fonts/Manrope-SemiBold.ttf
 "
 
 # Check required files
@@ -94,17 +96,11 @@ chmod 755 "$DATA_ROOT/tools/lumaglass"
 cp tools/autostart.sh "$DATA_ROOT/tools/"
 chmod 755 "$DATA_ROOT/tools/autostart.sh"
 
-# Copy payload recursively
-mkdir -p "$DATA_ROOT/payload/compositor"
-mkdir -p "$DATA_ROOT/payload/home"
-mkdir -p "$DATA_ROOT/payload/wallpaper"
-cp payload/compositor/StarfishFullscreenContainer.qml "$DATA_ROOT/payload/compositor/"
-cp payload/home/home.xml "$DATA_ROOT/payload/home/"
-cp payload/home/en.json.sed "$DATA_ROOT/payload/home/"
-cp payload/wallpaper/bg_hd.png "$DATA_ROOT/payload/wallpaper/"
-cp payload/wallpaper/bg_2k.png "$DATA_ROOT/payload/wallpaper/"
-cp payload/wallpaper/bg_4k.png "$DATA_ROOT/payload/wallpaper/"
-cp payload/wallpaper/wall_1080.png "$DATA_ROOT/payload/wallpaper/"
+# Copy the payload tree as-is: the tool stages directories (compositor QML,
+# theme, fonts) rather than single files.
+mkdir -p "$DATA_ROOT/payload"
+cp -R payload/. "$DATA_ROOT/payload/"
+cp tools/tileicons.js "$DATA_ROOT/tools/"
 
 # Create deterministic data.tar.gz
 # Use fixed mtime, owner/group 0, sorted filenames

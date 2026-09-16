@@ -46,6 +46,20 @@ WALL_SRC="$APPDIR/payload/wallpaper/wall_1080.png"
 BG_HD_SRC="$APPDIR/payload/wallpaper/bg_hd.png"
 BG_2K_SRC="$APPDIR/payload/wallpaper/bg_2k.png"
 BG_4K_SRC="$APPDIR/payload/wallpaper/bg_4k.png"
+# The compositor-drawn Home: a QML directory swapped into the shadow module
+# beside the container, a key-filter script registered with configd that hands
+# it the remote, and the theme it reads at runtime. Fonts and theme live
+# outside the module so the companion app can change them without a module
+# rebuild.
+LUMA_SRC="$APPDIR/payload/compositor/lumaglass"
+FONTS_SRC="$APPDIR/payload/fonts"
+THEME_SRC="$APPDIR/payload/theme"
+KEYFILTER_SRC="$APPDIR/payload/keyfilter/lumaglass.js"
+LUMA_STAGE="$STATE/luma"
+FONTS_DIR="$STATE/fonts"
+THEME_DIR="$STATE/theme"
+KEYFILTER_DIR="$STATE/keyfilter"
+KEYFILTER_HANDLER=handleLumaHome
 
 # The compositor resolves QML modules through QML2_IMPORT_PATH, and its unit
 # reads an optional environment file from /var - which is writable and
@@ -493,10 +507,87 @@ stage_compositor() {
       "$QML_SRC" > "$out.tmp.$$" && mv "$out.tmp.$$" "$out"
 }
 
+tree_fp() {
+  # Content hash of a directory (or a file): every file's bytes in path order,
+  # so a one-byte QML edit changes it and a rename does too.
+  [ -e "$1" ] || { printf 'missing'; return 0; }
+  ( cd "$(dirname "$1")" && find "$(basename "$1")" -type f | sort | while IFS= read -r f; do printf '%s\n' "$f"; cat "$f"; done ) 2>/dev/null | md5sum | cut -c1-32
+}
+
+stage_luma() {
+  # $1 = fps (true|false), $2 = output dir (default: the live stage). The Home
+  # QML directory copied verbatim plus a generated settings.json carrying the
+  # fps flag: it lives inside the module so that flipping fps changes the
+  # staged tree and earns the compositor restart that makes it visible.
+  # build_shadow copies the directory into the module. Nothing under
+  # controllers/ is shadowed: types reached through the module's qmldir
+  # (StarfishKeyController and friends) resolve to /usr/lib/qt5 regardless of
+  # QML2_IMPORT_PATH on this firmware, so Home input goes through the
+  # container's focus instead.
+  fps="$1"; out="${2:-$LUMA_STAGE}"
+  [ -d "$LUMA_SRC" ] || return 1
+  rm -rf "$out.tmp.$$" 2>/dev/null
+  mkdir -p "$out.tmp.$$" 2>/dev/null || return 1
+  cp -R "$LUMA_SRC" "$out.tmp.$$/lumaglass" 2>/dev/null || { rm -rf "$out.tmp.$$"; return 1; }
+  printf '{"fps":%s}\n' "$fps" > "$out.tmp.$$/lumaglass/settings.json"
+  rm -rf "$out" 2>/dev/null
+  mv "$out.tmp.$$" "$out"
+}
+
+stage_theme() {
+  # Fonts and the default wallpaper are payload-owned and always refreshed.
+  # theme.json and layout.json belong to the user once edited: the companion
+  # app changes them in place. A file still identical to the copy this tool
+  # last shipped is not edited, so it follows the payload; an edited one is
+  # left alone.
+  mkdir -p "$FONTS_DIR" "$THEME_DIR" 2>/dev/null || return 1
+  cp -f "$FONTS_SRC"/*.ttf "$FONTS_DIR/" 2>/dev/null
+  cp -f "$WALL_SRC" "$THEME_DIR/wall_1080.png" 2>/dev/null
+  for f in theme.json layout.json; do
+    shipped=$(cat "$THEME_DIR/.shipped-$f" 2>/dev/null)
+    current=$(md5sum < "$THEME_DIR/$f" 2>/dev/null | cut -c1-32)
+    if [ ! -f "$THEME_DIR/$f" ] || [ -z "$shipped" ] || [ "$current" = "$shipped" ]; then
+      cp -f "$THEME_SRC/$f" "$THEME_DIR/$f" 2>/dev/null
+      md5sum < "$THEME_SRC/$f" | cut -c1-32 > "$THEME_DIR/.shipped-$f"
+    fi
+  done
+  return 0
+}
+
+keyfilter_set() {
+  # $1 = add|remove. The stock StarfishKeyFilter builds its handler chain from
+  # the configd list com.webos.surfacemanager.keyFilters, and picks up changes
+  # live (Settings.subscribe). That list is the only way a script of ours sees
+  # remote keys inside the compositor: a shadowed controllers/StarfishKeyFilter
+  # .qml is never loaded on this firmware (module types resolve to /usr/lib
+  # regardless of QML2_IMPORT_PATH; only relative-file references from an
+  # already-shadowed view pick up the override). Our entry goes last so the
+  # stock handlers register first whatever happens to ours.
+  mode="$1"
+  if [ "$mode" = add ]; then
+    mkdir -p "$KEYFILTER_DIR" 2>/dev/null || return 1
+    cp -f "$KEYFILTER_SRC" "$KEYFILTER_DIR/lumaglass.js" 2>/dev/null || return 1
+  fi
+  python3 - "$mode" "$KEYFILTER_HANDLER" "$KEYFILTER_DIR/lumaglass.js" <<'PY' 2>>"$LOGFILE"
+import json, subprocess, sys
+mode, handler, path = sys.argv[1:4]
+name = "com.webos.surfacemanager.keyFilters"
+out = subprocess.run(["luna-send", "-n", "1", "luna://com.webos.service.config/getConfigs",
+                      json.dumps({"configNames": [name]})], capture_output=True, text=True).stdout
+lst = json.loads(out)["configs"][name]
+lst = [e for e in lst if e.get("handler") != handler]
+if mode == "add":
+    lst.append({"handler": handler, "file": path})
+r = subprocess.run(["luna-send", "-n", "1", "luna://com.webos.service.config/setConfigs",
+                    json.dumps({"configs": {name: lst}})], capture_output=True, text=True).stdout
+sys.exit(0 if '"returnValue":true' in r else 1)
+PY
+}
+
 staged_hash() {
-  # Identity of the whole staged set: everything a bind exposes to the
-  # compositor and to Home.
-  cat "$COMPOSITOR_STAGE" "$WALLPAPER_STAGE" "$ASSETS/home.xml" "$ASSETS/i18n/en.json" 2>/dev/null | md5sum | cut -c1-32
+  # Identity of the whole staged set: everything a bind or the shadow module
+  # exposes to the compositor and to Home.
+  { cat "$COMPOSITOR_STAGE" "$WALLPAPER_STAGE" "$ASSETS/home.xml" "$ASSETS/i18n/en.json" 2>/dev/null; tree_fp "$LUMA_STAGE"; } | md5sum | cut -c1-32
 }
 
 stock_module_fp() {
@@ -526,10 +617,12 @@ build_shadow() {
   # never sees a half-copied module.
   [ -d "$STOCK_QML_MODULE" ] || return 1
   [ -f "$COMPOSITOR_STAGE" ] || return 1
+  [ -d "$LUMA_STAGE/lumaglass" ] || return 1
   rm -rf "$SHADOW_ROOT.next" 2>/dev/null
   mkdir -p "$SHADOW_ROOT.next" 2>/dev/null || return 1
   cp -a "$STOCK_QML_MODULE" "$SHADOW_ROOT.next/" 2>/dev/null || { rm -rf "$SHADOW_ROOT.next"; return 1; }
   cp -f "$COMPOSITOR_STAGE" "$SHADOW_ROOT.next/WebOSCompositor/$MODULE_RELPATH" 2>/dev/null || { rm -rf "$SHADOW_ROOT.next"; return 1; }
+  cp -R "$LUMA_STAGE/lumaglass" "$SHADOW_ROOT.next/WebOSCompositor/lumaglass" 2>/dev/null || { rm -rf "$SHADOW_ROOT.next"; return 1; }
 
   # Get the contents on disk BEFORE the rename publishes them. /var is ext4
   # data=ordered, so without this a power cut can commit the directory entries
@@ -553,6 +646,7 @@ shadow_current() {
   # module installed right now.
   [ -f "$SHADOW_QML" ] || return 1
   [ "$(md5sum < "$SHADOW_QML" 2>/dev/null)" = "$(md5sum < "$COMPOSITOR_STAGE" 2>/dev/null)" ] || return 1
+  [ "$(tree_fp "$SHADOW_ROOT/WebOSCompositor/lumaglass")" = "$(tree_fp "$LUMA_STAGE/lumaglass")" ] || return 1
   [ "$(cat "$SHADOW_SELF_FP" 2>/dev/null)" = "$(shadow_self_fp)" ] || return 1
   [ "$(cat "$SHADOW_STOCK_FP" 2>/dev/null)" = "$(stock_module_fp)" ] || return 1
   return 0
@@ -644,17 +738,6 @@ restart_launchpoint_services() {
   i=0; while [ "$i" -lt 20 ] && ! systemctl is-active homelaunchpoints.service >/dev/null 2>&1; do sleep 1; i=$((i+1)); done
 }
 
-apply_tile_icons() {
-  TILES_CHANGED=0
-  [ -x "$NODE" ] && [ -f "$TILEICONS" ] || return 0
-  out=$("$NODE" "$TILEICONS" apply "$STATE" "$WALLPAPER_STAGE" 2>>"$LOGFILE") || { log_line "tile icons: failed"; return 0; }
-  n=$(printf '%s' "$out" | sed -n 's/.*"changed":\([0-9]*\).*/\1/p'); [ -n "$n" ] || n=0
-  if [ "$n" -gt 0 ]; then
-    log_line "tile icons: $n change(s): $(printf '%s' "$out" | sed -n 's/.*"log":\(.*\)}$/\1/p' | cut -c1-400)"
-    restart_launchpoint_services
-    TILES_CHANGED=1
-  fi
-}
 
 revert_tile_icons() {
   [ -x "$NODE" ] && [ -f "$TILEICONS" ] || return 0
@@ -678,6 +761,7 @@ do_revert_internal() {
   # not the restart below succeeds.
   if [ -f "$ENV_FILE" ]; then REVERT_CHANGED=1; fi
   remove_env
+  keyfilter_set remove
   # Nothing of ours should run on the boot path after a revert, including the
   # PATH shim kdump.service would otherwise resolve.
   remove_early_hook
@@ -805,26 +889,41 @@ verb_apply() {
   # untouched, so a no-op apply neither remounts nor restarts anything.
   fps_now=$(cfg_get_bool fps); [ -n "$fps_now" ] || fps_now=false
   stage_compositor "$fps_now" "$COMPOSITOR_STAGE.next"
+  if ! stage_luma "$fps_now" "$LUMA_STAGE.next"; then
+    log_line "apply: Home QML payload missing"
+    ntfy_notify "LumaGlass apply failed: Home QML payload missing"
+    emit_error "Home QML payload missing"
+    return 1
+  fi
+  stage_theme
+  # The key-filter script is read once when the compositor builds its handler
+  # chain, so a changed script needs the restart below; compare before the copy.
+  kf_changed=1
+  [ "$(md5sum < "$KEYFILTER_SRC" 2>/dev/null)" = "$(md5sum < "$KEYFILTER_DIR/lumaglass.js" 2>/dev/null)" ] && kf_changed=0
+  keyfilter_set add || log_line "apply: could not register the key filter with configd"
 
   # What the compositor reads (QML, wallpaper) is tracked apart from the rest
   # of the set: a running compositor that already has the shadow only needs a
   # restart when one of those two actually changed, and nothing else in the
   # set can be reached with a restart alone.
   compositor_changed=1
-  if [ "$(md5sum < "$COMPOSITOR_STAGE.next" 2>/dev/null)" = "$(md5sum < "$COMPOSITOR_STAGE" 2>/dev/null)" ] \
-     && [ "$(md5sum < "$WALL_SRC" 2>/dev/null)" = "$(md5sum < "$WALLPAPER_STAGE" 2>/dev/null)" ]; then
+  if [ "$kf_changed" -eq 0 ] \
+     && [ "$(md5sum < "$COMPOSITOR_STAGE.next" 2>/dev/null)" = "$(md5sum < "$COMPOSITOR_STAGE" 2>/dev/null)" ] \
+     && [ "$(md5sum < "$WALL_SRC" 2>/dev/null)" = "$(md5sum < "$WALLPAPER_STAGE" 2>/dev/null)" ] \
+     && [ "$(tree_fp "$LUMA_STAGE.next")" = "$(tree_fp "$LUMA_STAGE")" ]; then
     compositor_changed=0
   fi
   changed=1
   if [ "$compositor_changed" -eq 0 ] && all_binds_live && shadow_current && env_live; then
     changed=0
-    rm -f "$COMPOSITOR_STAGE.next"
+    rm -f "$COMPOSITOR_STAGE.next"; rm -rf "$LUMA_STAGE.next"
     log_line "apply: staged set unchanged, shadow current, assets bound, not remounting"
   fi
 
   if [ "$changed" -eq 1 ]; then
     cp -f "$WALL_SRC" "$WALLPAPER_STAGE" 2>/dev/null
     mv -f "$COMPOSITOR_STAGE.next" "$COMPOSITOR_STAGE"
+    rm -rf "$LUMA_STAGE" 2>/dev/null; mv -f "$LUMA_STAGE.next" "$LUMA_STAGE"
 
     # 4. Build the shadow compositor module and point the compositor's env
     # file at it. This is what a freshly starting compositor reads; nothing
@@ -864,9 +963,11 @@ verb_apply() {
     record_bound_now
   fi
 
-  # 5b. Tile colours and black-lift from the icons. Apps installed or updated
-  # since the last apply are covered by the same pass.
-  apply_tile_icons
+  # 5b. The compositor paints the dock itself now, so the per-app icon and
+  # iconColor edits Home once needed are restored and never made again.
+  REVERT_CHANGED=0
+  revert_tile_icons
+  TILES_CHANGED=$REVERT_CHANGED
 
   # 6. Bring the change on screen.
   #
@@ -956,7 +1057,7 @@ verb_boot_bind() {
     printf '{"ok":true,"bound":false,"reason":"failsafe"}\n'
     return 0
   fi
-  if [ ! -f "$COMPOSITOR_STAGE" ] || [ ! -f "$WALLPAPER_STAGE" ] || [ ! -f "$ASSETS/home.xml" ] || [ ! -d "$ASSETS/i18n" ]; then
+  if [ ! -f "$COMPOSITOR_STAGE" ] || [ ! -f "$WALLPAPER_STAGE" ] || [ ! -d "$LUMA_STAGE/lumaglass" ] || [ ! -f "$ASSETS/home.xml" ] || [ ! -d "$ASSETS/i18n" ]; then
     log_line "boot-bind: no staged set, leaving it to apply"
     printf '{"ok":true,"bound":false,"reason":"no-stage"}\n'
     return 0
@@ -1008,6 +1109,7 @@ verb_boot_bind() {
     fi
   fi
   write_env
+  keyfilter_set add || log_line "boot-bind: could not register the key filter with configd"
 
   n=0
   if ! is_mounted "$STOCK_ASSETS"; then
@@ -1015,10 +1117,6 @@ verb_boot_bind() {
   fi
   if all_binds_live; then
     record_bound_now
-    # An app updated overnight ships stock colours again; fix it before Home
-    # settles. Rarely changes anything, and then only restarts what it must.
-    apply_tile_icons
-    if [ "$TILES_CHANGED" -eq 1 ]; then kill_home_app; relaunch_home; fi
     log_line "boot-bind: $n bind(s) made, assets live, compositor already on shadow=$(compositor_has_shadow && echo yes || echo no)"
     printf '{"ok":true,"bound":true,"mounts":%s}\n' "$(count_mounts)"
   else

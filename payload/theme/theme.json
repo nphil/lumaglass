@@ -1,0 +1,95 @@
+{
+  "version": 1,
+  "name": "Ros\u00e9 Pine silk",
+  "wallpaper": "wall_1080.png",
+  "material": "auto",
+  "materialThreshold": 0.55,
+  "dark": {
+    "ink": "#F2EFF6",
+    "ink2": "#A8F2EFF6",
+    "ink3": "#6BF2EFF6",
+    "glass": "#66120E1A",
+    "glassEdge": "#21FFFFFF",
+    "glassFocus": "#8F2C263A",
+    "glassFocusEdge": "#33FFFFFF",
+    "scrim": [
+      0.1,
+      0.18,
+      0.46
+    ]
+  },
+  "light": {
+    "ink": "#17131F",
+    "ink2": "#A817131F",
+    "ink3": "#6B17131F",
+    "glass": "#85FFFFFF",
+    "glassEdge": "#D9FFFFFF",
+    "glassFocus": "#B8FFFFFF",
+    "glassFocusEdge": "#E6FFFFFF",
+    "scrim": [
+      0.06,
+      0.1,
+      -0.1
+    ]
+  },
+  "accent": "tile",
+  "radius": 26,
+  "tileRadius": 22,
+  "blurRadius": 30,
+  "type": {
+    "clock": 92,
+    "temp": 84
+  },
+  "focus": {
+    "tileScale": 1.12,
+    "cardScale": 1.03,
+    "cardLift": 4
+  },
+  "motion": {
+    "focusMs": 150,
+    "focusEasing": "OutCubic",
+    "cardMs": 180,
+    "cardEasing": "OutCubic",
+    "scrollMs": 300,
+    "scrollEasing": "OutCubic",
+    "labelMs": 120,
+    "layerMs": 220,
+    "reduced": false
+  },
+  "tiles": {
+    "inset": 19,
+    "fullCanvasEdgeAlpha": 0.9,
+    "icons": {},
+    "plates": {
+      "com.webos.app.discovery": "#3ea86a"
+    }
+  },
+  "clock": {
+    "style": "analog",
+    "twelveHour": true,
+    "greeting": true,
+    "secondHand": "#ff3b5c"
+  },
+  "weather": {
+    "zip": "30311",
+    "units": "fahrenheit",
+    "days": 5
+  },
+  "news": {
+    "feeds": [
+      {
+        "tag": "WORLD",
+        "src": "BBC News",
+        "url": "https://feeds.bbci.co.uk/news/world/rss.xml"
+      },
+      {
+        "tag": "U.S.",
+        "src": "BBC News",
+        "url": "https://feeds.bbci.co.uk/news/world/us_and_canada/rss.xml"
+      }
+    ],
+    "slideMs": 10000,
+    "refreshMs": 900000
+  },
+  "saturation": 0.25
+}
