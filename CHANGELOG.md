@@ -59,6 +59,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   clock. `theme.wallpaperMotion` sets amplitude, speed, depth, fps or turns
   it off; `motion.reduced` disables it. The glass blur stays baked from the
   still image so nothing above changes.
+- Wallpaper motion is adjustable in two places: a Wallpaper panel in the
+  companion app (`lumaglass theme get|set` behind it) and a popover under
+  the gear on Home, where Left/Right change amount, speed, depth, wave size,
+  detail and frame rate with the widgets and dock faded out so the wallpaper
+  is seen bare; Back saves to theme.json. Other popovers dim the page behind
+  them by 30% (22% on the light material).
+- OLED care: after `theme.idleDim.minutes` (5) without input the bar, cards
+  and dock ease to `theme.idleDim.opacity` (0.6); any key or pointer move
+  restores them.
 - The news card cross-fades between stories (hero images mixed in the
   card's own shader, text dipping out and in) instead of cutting.
 - Frame budget: a sustained animation with the full layout and the live

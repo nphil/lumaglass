@@ -106,11 +106,18 @@
     '[mock mode] Using simulated CLI responses'
   ];
 
+  const mockTheme = { wallpaperMotion: { enabled: true, amplitude: 4, speed: 1, depth: 0.25, scale: 1, detail: 0.35, fps: 30 } };
+
   async function mockExec(cmd) {
     // Simulate network delay
     await new Promise(r => setTimeout(r, 300));
 
     let stdoutString = '{"ok":true}';
+    if (cmd.includes(' theme ')) {
+      const m = /theme set '(.*)'$/.exec(cmd);
+      if (m) Object.assign(mockTheme.wallpaperMotion, JSON.parse(m[1]).wallpaperMotion || {});
+      return { returnValue: true, stdoutString: JSON.stringify({ ok: true, theme: mockTheme }) };
+    }
 
     if (cmd.includes('status')) {
       stdoutString = JSON.stringify({
@@ -214,6 +221,9 @@
     ntfyOff: document.getElementById('ntfy-off'),
     ntfyCancel: document.getElementById('ntfy-cancel'),
     logContent: document.getElementById('log-content'),
+    wallpaperPanel: document.getElementById('overlay-wallpaper'),
+    wallpaperRows: document.getElementById('wallpaper-rows'),
+    wallpaperClose: document.getElementById('wallpaper-close'),
     logClose: document.getElementById('log-close'),
     togglePersist: document.getElementById('toggle-persist'),
     toggleFps: document.getElementById('toggle-fps'),
@@ -244,6 +254,8 @@
       focusable = [dom.ntfyInput, dom.ntfySave, dom.ntfyOff, dom.ntfyCancel];
     } else if (state.currentMode === 'log') {
       focusable = [dom.logContent, dom.logClose];
+    } else if (state.currentMode === 'wallpaper') {
+      focusable = Array.from(dom.wallpaperRows.querySelectorAll('.wp-row')).concat([dom.wallpaperClose]);
     }
 
     if (index < 0) index = 0;
@@ -273,6 +285,12 @@
         closeLogPanel();
         e.preventDefault();
       }
+      return;
+    }
+
+    if (state.currentMode === 'wallpaper' && (code === 37 || code === 39)) { // Left / Right adjust
+      adjustWallpaperRow(document.activeElement, code === 39 ? 1 : -1);
+      e.preventDefault();
       return;
     }
 
@@ -351,6 +369,84 @@
     dom.busy.setAttribute('hidden', '');
     dom.ntfyEditor.setAttribute('hidden', '');
     dom.logPanel.setAttribute('hidden', '');
+    dom.wallpaperPanel.setAttribute('hidden', '');
+  }
+
+  /* ====== Wallpaper motion ====== */
+
+  const wallpaperControls = [
+    { key: 'enabled', label: 'Motion', kind: 'toggle', def: true },
+    { key: 'amplitude', label: 'Amount', min: 0, max: 16, step: 1, unit: ' px', def: 4 },
+    { key: 'speed', label: 'Speed', min: 0.2, max: 3, step: 0.1, unit: 'x', def: 1 },
+    { key: 'depth', label: 'Depth', min: 0, max: 1, step: 0.05, unit: '', def: 0.25 },
+    { key: 'scale', label: 'Wave size', min: 0.5, max: 2.5, step: 0.1, unit: 'x', def: 1 },
+    { key: 'detail', label: 'Detail', min: 0, max: 1, step: 0.05, unit: '', def: 0.35 },
+    { key: 'fps', label: 'Frame rate', min: 15, max: 60, step: 5, unit: ' fps', def: 30 }
+  ];
+  const wallpaper = { values: {}, timer: null, pending: {} };
+
+  function fmtWallpaper(c, v) {
+    if (c.kind === 'toggle') return v ? 'On' : 'Off';
+    return (c.step >= 1 ? Math.round(v) : Number(v).toFixed(c.step >= 0.1 ? 1 : 2)) + c.unit;
+  }
+
+  function renderWallpaperRows() {
+    dom.wallpaperRows.innerHTML = '';
+    for (const c of wallpaperControls) {
+      const row = document.createElement('div');
+      row.className = 'wp-row focusable';
+      row.tabIndex = 0;
+      row.dataset.key = c.key;
+      const v = wallpaper.values[c.key] === undefined ? c.def : wallpaper.values[c.key];
+      row.innerHTML = '<span class="wp-label">' + c.label + '</span><span class="wp-value">&#8249; ' + fmtWallpaper(c, v) + ' &#8250;</span>';
+      row.addEventListener('click', () => adjustWallpaperRow(row, 1));
+      dom.wallpaperRows.appendChild(row);
+    }
+  }
+
+  function adjustWallpaperRow(row, dir) {
+    if (!row || !row.dataset.key) return;
+    const c = wallpaperControls.find(x => x.key === row.dataset.key);
+    let v = wallpaper.values[c.key] === undefined ? c.def : wallpaper.values[c.key];
+    if (c.kind === 'toggle') v = !v;
+    else { v = Math.round((v + dir * c.step) / c.step) * c.step; v = Math.max(c.min, Math.min(c.max, Math.round(v * 100) / 100)); }
+    wallpaper.values[c.key] = v;
+    wallpaper.pending[c.key] = v;
+    row.querySelector('.wp-value').innerHTML = '&#8249; ' + fmtWallpaper(c, v) + ' &#8250;';
+    clearTimeout(wallpaper.timer);
+    wallpaper.timer = setTimeout(flushWallpaper, 250);
+  }
+
+  async function flushWallpaper() {
+    const patch = wallpaper.pending; wallpaper.pending = {};
+    if (!Object.keys(patch).length) return;
+    try {
+      await cli('theme', "set '" + JSON.stringify({ wallpaperMotion: patch }).replace(/'/g, "'\\''") + "'");
+      dom.footerStatus.textContent = 'Wallpaper updated';
+    } catch (err) {
+      showError(err.message);
+    }
+  }
+
+  async function onWallpaperOpen() {
+    try {
+      const res = await cli('theme', 'get');
+      wallpaper.values = Object.assign({}, (res.theme && res.theme.wallpaperMotion) || {});
+    } catch (err) {
+      showError(err.message);
+      wallpaper.values = {};
+    }
+    renderWallpaperRows();
+    dom.wallpaperPanel.removeAttribute('hidden');
+    setFocus(0, 'wallpaper');
+  }
+
+  function onWallpaperClose() {
+    clearTimeout(wallpaper.timer);
+    flushWallpaper();
+    dom.wallpaperPanel.setAttribute('hidden', '');
+    state.currentMode = 'main';
+    setFocus(rows.findIndex(r => r.id === 'row-wallpaper'));
   }
 
   /* ====== Row Actions ====== */
@@ -565,6 +661,8 @@
   document.getElementById('row-fps').addEventListener('click', onFpsToggle);
   document.getElementById('row-standby').addEventListener('click', onStandbyToggle);
   document.getElementById('row-ntfy').addEventListener('click', onNtfyOpen);
+  document.getElementById('row-wallpaper').addEventListener('click', onWallpaperOpen);
+  dom.wallpaperClose.addEventListener('click', onWallpaperClose);
   document.getElementById('row-ntfy-test').addEventListener('click', onNtfyTest);
   document.getElementById('row-log').addEventListener('click', onViewLog);
 

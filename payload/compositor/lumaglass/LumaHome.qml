@@ -61,7 +61,8 @@ Item {
             motion: { focusMs: 150, focusEasing: "OutCubic", cardMs: 180, cardEasing: "OutCubic",
                       scrollMs: 300, scrollEasing: "OutCubic", labelMs: 120, layerMs: 220, reduced: false },
             tiles: { inset: 19, fullCanvasEdgeAlpha: 0.9, icons: {} },
-            wallpaperMotion: { enabled: true, amplitude: 4, speed: 1, depth: 0.25, fps: 30 },
+            wallpaperMotion: { enabled: true, amplitude: 4, speed: 1, depth: 0.25, scale: 1, detail: 0.35, fps: 30 },
+            idleDim: { enabled: true, minutes: 5, opacity: 0.6 },
             clock: { style: "digital", twelveHour: true, greeting: true, secondHand: "#ff3b5c" },
             weather: { zip: "30311", units: "fahrenheit", days: 5 },
             news: { slideMs: 10000, refreshMs: 900000 }
@@ -164,11 +165,48 @@ Item {
         loadFpsSetting()
     }
     function reload() { loadAll() }
+    // Popover settings: apply a patch to the live theme immediately and persist it through
+    // the tool (theme set), which the 2 s poll then reads back as the same content.
+    function patchTheme(patch) {
+        var t = JSON.parse(JSON.stringify(root.theme))
+        for (var k in patch) {
+            if (typeof patch[k] === "object" && patch[k] !== null && typeof t[k] === "object" && t[k] !== null) { for (var k2 in patch[k]) t[k][k2] = patch[k][k2] }
+            else t[k] = patch[k]
+        }
+        root.theme = t
+        computeMaterial()
+    }
+    function persistTheme(patch) {
+        // Qt 5.12's QML XMLHttpRequest may write local files, so the layer saves theme.json
+        // itself: the on-disk object (not the merged defaults) plus the patch, one level deep.
+        var file = {}
+        try { file = JSON.parse(root.lastThemeText || "{}") } catch (e) { file = {} }
+        for (var k in patch) {
+            if (typeof patch[k] === "object" && patch[k] !== null) {
+                if (typeof file[k] !== "object" || file[k] === null) file[k] = {}
+                for (var k2 in patch[k]) file[k][k2] = patch[k][k2]
+            } else file[k] = patch[k]
+        }
+        var text = JSON.stringify(file, null, 2) + "\n"
+        console.info("[LumaHome] persist theme " + JSON.stringify(patch))
+        var x = new XMLHttpRequest()
+        x.onreadystatechange = function() {
+            if (x.readyState !== 4) return
+            console.info("[LumaHome] theme.json write status " + x.status)
+            if (x.status === 200 || x.status === 0) root.lastThemeText = text   // the poll sees its own write
+            else console.warn("[LumaHome] theme.json write failed: " + x.status)
+        }
+        try { x.open("PUT", root.themeDirUrl + "theme.json"); x.send(text) }
+        catch (e) { console.warn("[LumaHome] theme.json write failed: " + e) }
+    }
     Timer {
         // live theme preview for the companion app: content compare every 2 s, no restart
         interval: 2000; running: true; repeat: true
         onTriggered: {
-            loadJson(root.themeDirUrl + "theme.json", function(json, text) { if ((text || "") !== root.lastThemeText) root.applyTheme(json, text) })
+            loadJson(root.themeDirUrl + "theme.json", function(json, text) {
+                if ((text || "") === root.lastThemeText) return
+                root.applyTheme(json, text)
+            })
             loadJson(root.themeDirUrl + "layout.json", function(json, text) { if ((text || "") !== root.lastLayoutText) root.applyLayout(json, text) })
         }
     }
@@ -249,6 +287,8 @@ Item {
         property real amp: (root.wallMotion.amplitude || 4) / 1920
         property real speed: root.wallMotion.speed || 1
         property real depth: root.wallMotion.depth === undefined ? 0.25 : root.wallMotion.depth
+        property real waveScale: root.wallMotion.scale || 1          // wave frequency multiplier
+        property real detail: root.wallMotion.detail === undefined ? 0.35 : root.wallMotion.detail   // finer second layer, 0..1
         property color s0: root.scrimColor((root.mat.scrim || [0, 0, 0])[0])
         property color s1: root.scrimColor((root.mat.scrim || [0, 0, 0])[1])
         property color s2: root.scrimColor((root.mat.scrim || [0, 0, 0])[2])
@@ -256,7 +296,8 @@ Item {
         property vector4d scrimB: Qt.vector4d(s1.r, s1.g, s1.b, s1.a)
         property vector4d scrimC: Qt.vector4d(s2.r, s2.g, s2.b, s2.a)
         // phases advanced on the CPU once per tick; the fragment only evaluates the fields
-        property vector4d phase: Qt.vector4d(t * 0.70, t * 0.50, t * 0.40, 0)
+        property vector4d phase: Qt.vector4d(t * 0.70, t * 0.50, t * 0.40, t * 0.90)
+        property vector4d params: Qt.vector4d(amp, depth, waveScale, detail)
         Timer {
             interval: Math.round(1000 / (root.wallMotion.fps || 30))
             running: liveWall.visible && root.hostActive
@@ -265,22 +306,25 @@ Item {
         }
         // The fields are at most 6 cycles across the screen, so they are evaluated per
         // vertex on a grid and interpolated; the fragment is one read plus the scrim.
-        mesh: GridMesh { resolution: Qt.size(48, 27) }
+        mesh: GridMesh { resolution: Qt.size(64, 36) }
         vertexShader: "
             uniform highp mat4 qt_Matrix;
             uniform highp vec4 phase;
-            uniform highp float amp;
-            uniform mediump float depth;
+            uniform highp vec4 params;   // amp, depth, scale, detail
             attribute highp vec4 qt_Vertex;
             attribute highp vec2 qt_MultiTexCoord0;
             varying highp vec2 vUv;
             varying mediump float vLight;
             void main() {
                 highp vec2 uv = qt_MultiTexCoord0;
-                mediump float w1 = sin(uv.y * 6.0 + phase.x) * cos(uv.x * 4.0 - phase.y);
-                mediump float w2 = sin((uv.x + uv.y) * 5.0 - phase.z);
-                vUv = uv + amp * vec2(w1 + 0.5 * w2, 0.7 * w2 - 0.5 * w1);
-                vLight = 1.0 + depth * 0.3 * (w1 - 0.5 * w2);
+                highp float k = params.z;
+                mediump float w1 = sin(uv.y * 6.0 * k + phase.x) * cos(uv.x * 4.0 * k - phase.y);
+                mediump float w2 = sin((uv.x + uv.y) * 5.0 * k - phase.z);
+                mediump float w3 = sin(uv.x * 11.0 * k + phase.w) * sin(uv.y * 9.0 * k - phase.x * 0.8);
+                highp vec2 disp = vec2(w1 + 0.5 * w2, 0.7 * w2 - 0.5 * w1) + params.w * 0.5 * vec2(w3, -w3);
+                vUv = uv + params.x * disp;
+                // light follows the slope of the displacement: crests brighten, troughs darken
+                vLight = 1.0 + params.y * (0.3 * (w1 - 0.5 * w2) + params.w * 0.25 * w3);
                 gl_Position = qt_Matrix * qt_Vertex;
             }"
         fragmentShader: "
@@ -343,7 +387,7 @@ Item {
     property var statusItems: (layout.statusBar.left || []).concat(layout.statusBar.right || [])
     property bool popoverOpen: focusLayer === "popover"
 
-    onHostActiveChanged: if (hostActive) { focusLayer = "dock"; statusBarItem.requestClosePopover() }
+    onHostActiveChanged: if (hostActive) { focusLayer = "dock"; statusBarItem.requestClosePopover(); touch() }
 
     function widgetRectById(id) {
         var i = widgetIndexById(id)
@@ -419,6 +463,7 @@ Item {
     function key(k, pressed, autoRepeat, deviceId) {
         var dir = directionFor(k)
         if (!dir || !hostActive) return false
+        if (pressed && !autoRepeat) touch()
         if (dir === "ok") {
             if (pressed) {
                 if (autoRepeat || okDown) return true
@@ -443,6 +488,8 @@ Item {
             else if (dir === "ok") { statusBarItem.popoverActivate(); if (!statusBarItem.popoverOpen) focusLayer = "statusbar" }
             else if (dir === "up") statusBarItem.popoverMove(-1)
             else if (dir === "down") statusBarItem.popoverMove(1)
+            else if (dir === "left") statusBarItem.popoverAdjust(-1)
+            else if (dir === "right") statusBarItem.popoverAdjust(1)
             return true
         }
         if (focusLayer === "dock") {
@@ -499,12 +546,28 @@ Item {
 
     // Pointer: anything not over a card/tile lands here so the stock Home underneath never
     // sees the Magic Remote.
-    MouseArea { anchors.fill: parent; hoverEnabled: true; z: 0 }
+    MouseArea { anchors.fill: parent; hoverEnabled: true; z: 0; onPositionChanged: root.touch() }
+
+    // OLED care: after theme.idleDim.minutes without input the chrome eases down to
+    // theme.idleDim.opacity (the wallpaper is already the least static thing on screen; the
+    // bar, cards and dock are what sit still). Any key or pointer move restores it.
+    property var idleDim: theme.idleDim || {}
+    property bool idle: false
+    function touch() { idle = false; idleTimer.restart() }
+    Timer {
+        id: idleTimer
+        interval: Math.max(30, (root.idleDim.minutes || 5) * 60) * 1000
+        running: root.hostActive && (root.idleDim.enabled !== false)
+        onTriggered: root.idle = true
+    }
+    property real chromeOpacity: idle ? (root.idleDim.opacity === undefined ? 0.6 : root.idleDim.opacity) : 1
+    Behavior on chromeOpacity { NumberAnimation { duration: 2000; easing.type: Easing.InOutQuad } }
 
     // ============================================================= chrome
     StatusBar {
         id: statusBarItem
         z: 3
+        opacity: root.chromeOpacity
         x: layout.safe.x
         y: layout.safe.y
         width: 1920 - 2 * layout.safe.x
@@ -521,13 +584,33 @@ Item {
         cardEasing: root.cardEasing
         layerMs: root.layerMs
         onRequestOpenPopover: { root.statusFocusIndex = index; root.focusLayer = "popover" }
+        onThemePatch: root.patchTheme(patch)
+        onThemePersist: root.persistTheme(patch)
         onHoverFocus: { root.statusFocusIndex = index; if (root.focusLayer !== "popover") root.focusLayer = "statusbar" }
+    }
+
+    // Popover scrim: one full-screen quad between the content and the status bar. A modest
+    // dim (~30%) marks the popover as the top layer while the page stays readable. The
+    // wallpaper settings popover instead clears the page: widgets and dock fade out so the
+    // wallpaper is seen bare while it is adjusted.
+    property bool previewMode: root.popoverOpen && statusBarItem.popoverType === "settings"
+    Rectangle {
+        anchors.fill: parent
+        z: 2
+        color: root.isLight ? "#ffffff" : "#000000"
+        opacity: root.popoverOpen && !root.previewMode ? statusBarItem.popoverScrim : 0
+        visible: opacity > 0.005
+        Behavior on opacity { NumberAnimation { duration: root.layerMs; easing.type: Easing.OutCubic } }
+        MouseArea { anchors.fill: parent; hoverEnabled: true; onClicked: { statusBarItem.requestClosePopover(); root.focusLayer = "statusbar" } }
     }
 
     Item {
         id: widgetLayer
         anchors.fill: parent
         z: 1
+        opacity: (root.previewMode ? 0 : 1) * root.chromeOpacity
+        visible: opacity > 0.005
+        Behavior on opacity { NumberAnimation { duration: root.layerMs; easing.type: Easing.OutCubic } }
         Repeater {
             id: widgetRepeater
             model: root.nonDockWidgets
@@ -543,7 +626,7 @@ Item {
                 themeDirUrl: root.themeDirUrl
                 moduleDirUrl: root.moduleDirUrl
                 focused: root.focusLayer === "widgets" && root.widgetFocusId === modelData.id
-                dimmed: (root.focusLayer === "widgets" && root.widgetFocusId !== modelData.id) || root.popoverOpen
+                dimmed: root.focusLayer === "widgets" && root.widgetFocusId !== modelData.id
                 backdrop: blurTex
                 cardMs: root.cardMs
                 cardEasing: root.cardEasing
@@ -556,6 +639,9 @@ Item {
     Loader {
         id: dockLoader
         z: 1
+        opacity: (root.previewMode ? 0 : 1) * root.chromeOpacity
+        visible: opacity > 0.005
+        Behavior on opacity { NumberAnimation { duration: root.layerMs; easing.type: Easing.OutCubic } }
         active: root.dockEntry !== null
         x: active ? root.cellRect(root.dockEntry).x : 0
         y: active ? root.cellRect(root.dockEntry).y : 0
@@ -569,7 +655,7 @@ Item {
             originX: dockLoader.x
             originY: dockLoader.y
             focusedLayer: root.focusLayer === "dock"
-            dimmed: root.focusLayer === "widgets" || root.popoverOpen
+            dimmed: root.focusLayer === "widgets"
             backdrop: blurTex
             scrollMs: root.scrollMs
             scrollEasing: root.scrollEasing

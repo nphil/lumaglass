@@ -86,6 +86,14 @@
       </span>
     </section>
 
+    <section class="row glass focusable" id="row-wallpaper" tabindex="0" data-role="wallpaper">
+      <div class="row-main">
+        <span class="row-title">Wallpaper motion</span>
+        <span class="row-sub" id="wallpaper-sub">Live wallpaper: amount, speed, depth, wave size, detail, frame rate</span>
+      </div>
+      <span class="row-chevron">&#8250;</span>
+    </section>
+
     <section class="row glass focusable" id="row-ntfy" tabindex="0" data-role="ntfy">
       <div class="row-main">
         <span class="row-title">ntfy notifications</span>
@@ -157,6 +165,18 @@
         <button class="overlay-btn focusable" id="ntfy-save" tabindex="0" data-role="ntfy-save">Save</button>
         <button class="overlay-btn focusable" id="ntfy-off" tabindex="0" data-role="ntfy-off">Turn off</button>
         <button class="overlay-btn focusable" id="ntfy-cancel" tabindex="0" data-role="ntfy-cancel">Cancel</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Wallpaper motion panel -->
+  <div class="overlay" id="overlay-wallpaper" hidden>
+    <div class="overlay-panel glass wallpaper-panel">
+      <h2>Wallpaper motion</h2>
+      <p>Left and right adjust. Changes show on Home within two seconds; press Home to look.</p>
+      <div id="wallpaper-rows"></div>
+      <div class="overlay-actions">
+        <button class="overlay-btn focusable" id="wallpaper-close" tabindex="0" data-role="wallpaper-close">Done</button>
       </div>
     </div>
   </div>

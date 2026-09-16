@@ -56,6 +56,7 @@ FONTS_SRC="$APPDIR/payload/fonts"
 THEME_SRC="$APPDIR/payload/theme"
 KEYFILTER_SRC="$APPDIR/payload/keyfilter/lumaglass.js"
 KEYFILTER_TOOL="$APPDIR/tools/keyfilter.py"
+THEME_TOOL="$APPDIR/tools/theme.py"
 LUMA_STAGE="$STATE/luma"
 FONTS_DIR="$STATE/fonts"
 THEME_DIR="$STATE/theme"
@@ -1417,6 +1418,19 @@ verb_version() {
 
 ensure_config
 
+verb_theme() {
+  # theme get | theme set '<json>': the companion app's and the Home popovers' way to edit
+  # theme.json. The Home layer polls the file, so a set is live within 2 s and nothing
+  # here restarts.
+  [ -f "$THEME_DIR/theme.json" ] || stage_theme
+  case "$1" in
+    get) python3 "$THEME_TOOL" "$THEME_DIR/theme.json" get < /dev/null ;;
+    set) [ -n "$2" ] || { emit_error "theme set needs a JSON object"; return 1; }
+         python3 "$THEME_TOOL" "$THEME_DIR/theme.json" set "$2" < /dev/null || { emit_error "theme update failed"; return 1; } ;;
+    *) emit_error "theme: get or set"; return 1 ;;
+  esac
+}
+
 case "$VERB" in
   status) verb_status; exit $? ;;
   apply) verb_apply; exit $? ;;
@@ -1428,6 +1442,7 @@ case "$VERB" in
   standby) verb_standby "${2:-}"; exit $? ;;
   ntfy) verb_ntfy "${2:-}" "${3:-}"; exit $? ;;
   log) verb_log "${2:-}"; exit $? ;;
+  theme) verb_theme "${2:-get}" "${3:-}"; exit $? ;;
   version) verb_version; exit $? ;;
   *) emit_error "unknown verb: $VERB"; exit 1 ;;
 esac

@@ -107,6 +107,11 @@ of pixel heights; the shipped layout pins the mock's 222/238/392. `stage_theme`
 overwrites a theme file only while it still equals the last shipped copy
 (`.shipped-<file>` md5), so user edits survive updates.
 
+Key codes: the remote's Back arrives as evdev KEY_PREVIOUS (412), not
+KEY_BACK (158); injecting 158 does nothing on Home. Qt 5.12's QML
+XMLHttpRequest can PUT to file://, which is how the Home popovers save
+theme.json (the compositor is not allowed to call Homebrew's exec service).
+
 Luna from the layer: `Service { appId: LS.appId }` (the compositor's own
 identity; a made-up appId gets no reply, silently). Account data:
 `accountmanager/getLoginUserData {serviceName:"LGE", subscribe:true}`

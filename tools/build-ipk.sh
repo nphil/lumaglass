@@ -33,6 +33,7 @@ assets/splash.png
 tools/lumaglass
 tools/autostart.sh
 tools/keyfilter.py
+tools/theme.py
 payload/compositor/StarfishFullscreenContainer.qml
 payload/compositor/lumaglass/LumaHome.qml
 payload/keyfilter/lumaglass.js
@@ -103,6 +104,7 @@ mkdir -p "$DATA_ROOT/payload"
 cp -R payload/. "$DATA_ROOT/payload/"
 cp tools/tileicons.js "$DATA_ROOT/tools/"
 cp tools/keyfilter.py "$DATA_ROOT/tools/"
+cp tools/theme.py "$DATA_ROOT/tools/"
 
 # Create deterministic data.tar.gz
 # Use fixed mtime, owner/group 0, sorted filenames
