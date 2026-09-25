@@ -821,12 +821,51 @@ Item {
         }
     }
 
-    // ============================================================= fps overlay / log
-    QtObject { id: fpsProbe; property int frames: 0; property int fps: 0 }
-    Connections { target: root.Window.window; onFrameSwapped: fpsProbe.frames++ }
+    // ====================================================== frame pacing probe / overlay
+    // onFrameSwapped fires once per presented frame of the compositor's own
+    // window, so this counts everything the set draws - Home, and anything
+    // composited over it, including the in-process system UI panels. An
+    // average hides the thing that is actually visible: one 33ms frame in an
+    // otherwise perfect second still reads as 59 fps. So the worst interval
+    // and the number of intervals past a frame and a half are logged too.
+    QtObject {
+        id: fpsProbe
+        property int frames: 0
+        property int fps: 0
+        property real last: 0
+        property real worst: 0      // ms, longest gap between presents this second
+        property int late: 0        // intervals over 25ms: a missed 60Hz deadline
+        property real worstShown: 0
+        property int lateShown: 0
+    }
+    Connections {
+        target: root.Window.window
+        onFrameSwapped: {
+            fpsProbe.frames++
+            var t = Date.now()
+            if (fpsProbe.last > 0) {
+                var dt = t - fpsProbe.last
+                if (dt > fpsProbe.worst) fpsProbe.worst = dt
+                if (dt > 25) fpsProbe.late++
+                // One line per long gap, so a transition can be judged frame by
+                // frame instead of through a one-second average that hides a
+                // single dropped frame. Only while the probe is on, and only
+                // for gaps that are visible as judder.
+                if (root.fpsEnabled && dt > 20 && dt < 5000)
+                    console.info("[FPSJANK] " + Math.round(dt))
+            }
+            fpsProbe.last = t
+        }
+    }
     Timer {
         interval: 1000; running: root.fpsEnabled; repeat: true
-        onTriggered: { fpsProbe.fps = fpsProbe.frames; fpsProbe.frames = 0; console.info("[FPSLOG] luma " + fpsProbe.fps) }
+        onTriggered: {
+            fpsProbe.fps = fpsProbe.frames
+            fpsProbe.worstShown = fpsProbe.worst
+            fpsProbe.lateShown = fpsProbe.late
+            console.info("[FPSLOG] luma " + fpsProbe.fps + " fps worst " + Math.round(fpsProbe.worst) + "ms late " + fpsProbe.late)
+            fpsProbe.frames = 0; fpsProbe.worst = 0; fpsProbe.late = 0
+        }
     }
     Rectangle {
         visible: root.fpsEnabled
@@ -835,9 +874,9 @@ Item {
         Text {
             id: fpsText
             x: 14; y: Math.round((34 - implicitHeight) / 2)
-            color: "#9ccfd8"
+            color: fpsProbe.lateShown > 0 ? "#eb6f92" : "#9ccfd8"
             font.family: "Manrope"; renderType: Text.NativeRendering; font.pixelSize: 18
-            text: "luma " + fpsProbe.fps + " fps"
+            text: "luma " + fpsProbe.fps + " fps  " + Math.round(fpsProbe.worstShown) + "ms"
         }
     }
 }

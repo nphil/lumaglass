@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `lumaglass systemui on|off|status` runs Quick Settings from a copy of LG's
+  QML tree under `/var/lib/lumaglass/systemui`, by pointing the panel's entry
+  in the configd object `com.webos.surfacemanager.systemUIManager` at it.
+  Nothing is written to `/usr`, and `off` restores the stock path in one
+  configd write. The copy is rebuilt whenever the stock tree's fingerprint
+  moves, so a firmware update cannot leave old QML running against new
+  libraries.
+- `payload/systemui/QuickSettings/Component/CommonBoxShadow.qml` replaces LG's
+  drop shadow, which rendered every shadowed item into an offscreen texture and
+  blurred it in two passes on each repaint, with kernels the call sites size up
+  to 51 samples. The replacement evaluates the shadow analytically from the
+  signed distance to a rounded box: one pass, no texture read, and no repaint
+  when the item it sits behind animates.
+
+### Changed
+
+- The frame probe reports pacing rather than a rate: worst interval and missed
+  60Hz deadlines per second, plus one line per gap over 20 ms. A single dropped
+  frame is invisible in a per-second average.
+
 ## [0.4.0] - 2026-09-15
 
 ### Changed

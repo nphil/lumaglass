@@ -10,6 +10,7 @@
 #   standby warm|cold      -> Quick Start+ on with webos-sddp off, or fully off
 #   ntfy set <url>|off|test -> configure/test ntfy.sh notifications
 #   log [n]                -> last n log lines (default 20)
+#   systemui on|off|status -> Quick Settings from our staged QML tree, or stock
 #   version                -> version string from appinfo.json
 #
 # Nothing is ever written outside $APPDIR, $STATE (/var/lib/lumaglass), and
@@ -65,6 +66,22 @@ FONTS_DIR="$STATE/fonts"
 THEME_DIR="$STATE/theme"
 KEYFILTER_DIR="$STATE/keyfilter"
 KEYFILTER_HANDLER=handleLumaHome
+
+# Quick Settings, drawn by the compositor from a QML tree in /usr that configd
+# names per app id. The stock tree is copied to /var once, our replacement
+# files are laid over the copy, and configd is pointed at it - so /usr keeps
+# its lowerdir-only overlay untouched and `systemui off` is one configd write.
+SYSTEMUI_SRC="$APPDIR/payload/systemui"
+SYSTEMUI_TOOL="$APPDIR/tools/systemui.py"
+SYSTEMUI_STAGE="$STATE/systemui"
+QS_APP=com.webos.app.quicksettings
+QS_STOCK=/usr/lib/qt5/qml/QuickSettings
+QS_STAGE="$SYSTEMUI_STAGE/QuickSettings"
+QS_MAIN="$QS_STAGE/QuickSettings.qml"
+# Fingerprint of the stock tree the staged copy was built from; a firmware
+# update changes it and forces a rebuild rather than feeding old QML to new
+# libraries.
+QS_STOCK_FP="$SYSTEMUI_STAGE/.stock-fp"
 
 # The compositor resolves QML modules through QML2_IMPORT_PATH, and its unit
 # reads an optional environment file from /var - which is writable and
@@ -585,6 +602,73 @@ keyfilter_set() {
     cp -f "$KEYFILTER_SRC" "$KEYFILTER_DIR/lumaglass.js" 2>/dev/null || return 1
   fi
   python3 "$KEYFILTER_TOOL" "$mode" "$KEYFILTER_HANDLER" "$KEYFILTER_DIR/lumaglass.js" < /dev/null 2>>"$LOGFILE"
+}
+
+systemui_stage() {
+  # Copy the stock Quick Settings tree once, then lay our files over it. The
+  # copy is 27MB; it is rebuilt only when the stock tree's fingerprint moves,
+  # which is to say after a firmware update.
+  fp=$(tree_fp "$QS_STOCK")
+  if [ ! -f "$QS_MAIN" ] || [ "$fp" != "$(cat "$QS_STOCK_FP" 2>/dev/null)" ]; then
+    rm -rf "$QS_STAGE.new" 2>/dev/null
+    mkdir -p "$SYSTEMUI_STAGE" 2>/dev/null || return 1
+    cp -a "$QS_STOCK" "$QS_STAGE.new" 2>/dev/null || return 1
+    rm -rf "$QS_STAGE.old" 2>/dev/null
+    [ -d "$QS_STAGE" ] && mv "$QS_STAGE" "$QS_STAGE.old" 2>/dev/null
+    mv "$QS_STAGE.new" "$QS_STAGE" 2>/dev/null || return 1
+    rm -rf "$QS_STAGE.old" 2>/dev/null
+    printf '%s\n' "$fp" > "$QS_STOCK_FP"
+  fi
+  # Our overlay, re-applied every time so an app update lands without a
+  # 27MB recopy. Mirrors the payload's directory layout onto the stage.
+  # No pipeline: a `while read` on the far side of one runs in a subshell,
+  # where a failed copy cannot fail the function.
+  ok=1
+  for rel in $(cd "$SYSTEMUI_SRC" && find . -type f -name '*.qml'); do
+    mkdir -p "$SYSTEMUI_STAGE/$(dirname "$rel")" 2>/dev/null
+    cp -f "$SYSTEMUI_SRC/$rel" "$SYSTEMUI_STAGE/$rel" 2>/dev/null || ok=0
+  done
+  [ "$ok" = 1 ] && [ -f "$QS_MAIN" ]
+}
+
+systemui_set() {
+  # $1 = on|off. Redirects the compositor's Quick Settings entry between our
+  # staged tree and the stock one. configd picks the change up live, but the
+  # panel is a preloaded surface: it is killed so the next open builds from
+  # the new path.
+  if [ "$1" = on ]; then
+    systemui_stage || return 1
+    python3 "$SYSTEMUI_TOOL" on "$QS_APP" "$QS_MAIN" < /dev/null 2>>"$LOGFILE" || return 1
+  else
+    python3 "$SYSTEMUI_TOOL" off "$QS_APP" < /dev/null 2>>"$LOGFILE" || return 1
+  fi
+  # The running instance holds the old QML; closing it is enough, the
+  # compositor rebuilds the loader on the next request.
+  luna-send -n 1 luna://com.webos.service.applicationManager/close \
+    "{\"id\":\"$QS_APP\"}" >/dev/null 2>&1
+  return 0
+}
+
+verb_systemui() {
+  case "${1:-status}" in
+    on|off)
+      take_mutation_lock || { emit_error "another mutation is in progress"; return 1; }
+      if systemui_set "$1"; then
+        log_line "systemui $1"
+        printf '{"ok":true,"systemui":"%s","main":%s}\n' "$1" "$(python3 "$SYSTEMUI_TOOL" status < /dev/null 2>/dev/null || echo null)"
+      else
+        emit_error "could not switch Quick Settings to $1"
+        return 1
+      fi
+      ;;
+    status)
+      printf '{"ok":true,"staged":%s,"main":%s}\n' \
+        "$( [ -f "$QS_MAIN" ] && echo true || echo false )" \
+        "$(python3 "$SYSTEMUI_TOOL" status < /dev/null 2>/dev/null || echo null)"
+      ;;
+    *) emit_error "usage: systemui on|off|status"; return 1 ;;
+  esac
+  return 0
 }
 
 staged_hash() {
@@ -1470,6 +1554,7 @@ case "$VERB" in
   ntfy) verb_ntfy "${2:-}" "${3:-}"; exit $? ;;
   log) verb_log "${2:-}"; exit $? ;;
   theme) verb_theme "${2:-get}" "${3:-}"; exit $? ;;
+  systemui) verb_systemui "${2:-status}"; exit $? ;;
   version) verb_version; exit $? ;;
   *) emit_error "unknown verb: $VERB"; exit 1 ;;
 esac
