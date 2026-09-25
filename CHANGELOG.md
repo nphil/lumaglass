@@ -37,13 +37,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   are tinted by the wallpaper and theme in use. A contrast guard darkens or
   lightens the derived sheet until its body text clears 7:1 against it, which
   is what keeps a pale theme from producing an unreadable menu.
-- Quick Settings is kept between opens. Stock rebuilt the whole panel on every
-  open, and the build blocked the open transition: one frozen frame of
-  236-357ms where the panel's own 180ms pause and 150ms slide should have run,
-  so the menu snapped into place instead of sliding. A panel that has finished
-  its data pass is retained with its subscriptions live, and the compositor
-  releases it when its close timer expires. Measured after: on screen 169ms
-  after the key, complete at 505ms, no frame over 20ms.
+- The panel's open cost is measured and documented, not yet fixed. Stock
+  rebuilds the whole view on every open, and the build blocks the open
+  transition: one frozen frame of 236-357ms where the panel's own 180ms pause
+  and 150ms slide should run, so the menu snaps into place instead of sliding.
+  Retaining the built view removes it (169ms to screen against 508ms, nothing
+  over 20ms), but an in-process system UI can only stand down by exiting, so a
+  retained panel leaves its view container in the foreground state and the
+  compositor then refuses the next launch - the settings button stops opening
+  anything. The retention patch is kept in tools/systemui_patch.py, disabled,
+  with what it needs to become safe.
 
 ### Changed
 

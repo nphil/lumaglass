@@ -343,9 +343,18 @@ edit(root / "Component" / "BaseControlPanelButton.qml",
      [(TILE_LIFT_FROM, TILE_LIFT_TO), (TILE_EDGE_FROM, TILE_EDGE_TO)])
 edit(root / "Component" / "ImageButton.qml", [(ICON_BUTTON_FROM, ICON_BUTTON_TO)])
 edit(root / "Component" / "ControlPanelImageButton.qml", [(ICON_SWAP_FROM, ICON_SWAP_TO)], required=False)
-edit(root / "QuickSettingsMain.qml",
-     [(READY_FLAG_FROM, READY_FLAG_TO), (READY_SET_FROM, READY_SET_TO), (EXIT_FROM, EXIT_TO)])
-edit(root / "QuickSettings.qml", [(TIMEOUT_FROM, TIMEOUT_TO), (LAUNCH_FROM, LAUNCH_TO)])
+# Retention is deliberately not applied.
+#
+# Keeping the panel alive across a close does remove the rebuild - measured at
+# 169ms to screen against 508ms, with no frame over 20ms - but it leaves the
+# compositor's view container in its foreground state, because the only way an
+# in-process system UI can stand down is to exit. The manager then rejects the
+# next launch outright ("event is not accepted: type=launch") and the settings
+# button on the remote stops opening anything at all.
+#
+# A working version has to hand the container a state it accepts while keeping
+# the loaded item, which means changing the container, not just the app. Until
+# then the panel is rebuilt per open, as stock.
 
 # Then the fills, across every component and container in the panel.
 for qml in sorted((root / "Component").glob("*.qml")) + sorted((root / "Containers").rglob("*.qml")):
