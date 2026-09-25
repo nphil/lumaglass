@@ -11,6 +11,7 @@
 #   ntfy set <url>|off|test -> configure/test ntfy.sh notifications
 #   log [n]                -> last n log lines (default 20)
 #   systemui on|off|status -> Quick Settings from our staged QML tree, or stock
+#   webglass on|off|status -> glass stylesheet in the settings web apps
 #   version                -> version string from appinfo.json
 #
 # Nothing is ever written outside $APPDIR, $STATE (/var/lib/lumaglass), and
@@ -73,6 +74,8 @@ KEYFILTER_HANDLER=handleLumaHome
 # its lowerdir-only overlay untouched and `systemui off` is one configd write.
 SYSTEMUI_SRC="$APPDIR/payload/systemui"
 SYSTEMUI_TOOL="$APPDIR/tools/systemui.py"
+SYSTEMUI_PATCH_TOOL="$APPDIR/tools/systemui_patch.py"
+PALETTE_TOOL="$APPDIR/tools/palette.py"
 SYSTEMUI_STAGE="$STATE/systemui"
 QS_APP=com.webos.app.quicksettings
 QS_STOCK=/usr/lib/qt5/qml/QuickSettings
@@ -82,6 +85,17 @@ QS_MAIN="$QS_STAGE/QuickSettings.qml"
 # update changes it and forces a rebuild rather than feeding old QML to new
 # libraries.
 QS_STOCK_FP="$SYSTEMUI_STAGE/.stock-fp"
+# Set while the menus are ours, so apply can put them back after a reboot (the
+# overlay mounts do not survive one) or after a firmware update (which replaces
+# the tree the staged copy was built from).
+SYSTEMUI_ON="$STATE/.systemui-on"
+
+# The web-app settings surfaces. Their UI is Enact/Sandstone drawn as a
+# transparent overlay, so a stylesheet is all it takes; the mount that delivers
+# it is described in webglass_set.
+WEBGLASS_SRC="$APPDIR/payload/webapps"
+WEBGLASS_STAGE="$STATE/webapps"
+WEBGLASS_ON="$STATE/.webglass-on"
 
 # The compositor resolves QML modules through QML2_IMPORT_PATH, and its unit
 # reads an optional environment file from /var - which is writable and
@@ -628,7 +642,86 @@ systemui_stage() {
     mkdir -p "$SYSTEMUI_STAGE/$(dirname "$rel")" 2>/dev/null
     cp -f "$SYSTEMUI_SRC/$rel" "$SYSTEMUI_STAGE/$rel" 2>/dev/null || ok=0
   done
-  [ "$ok" = 1 ] && [ -f "$QS_MAIN" ]
+  [ "$ok" = 1 ] || return 1
+  [ -f "$QS_MAIN" ] || return 1
+  # Targeted edits to LG's own files: the glass palette, and the retention that
+  # stops the panel being rebuilt on every open. Fatal on a missing anchor, so
+  # a firmware update that rewrites them is caught here rather than shipping a
+  # half-patched menu.
+  # The palette comes from the live theme, so the menus are tinted by the
+  # wallpaper in use rather than by constants in the patch.
+  pal=$(python3 "$PALETTE_TOOL" "$THEME_DIR/theme.json" qml < /dev/null 2>>"$LOGFILE")
+  python3 "$SYSTEMUI_PATCH_TOOL" "$QS_STAGE" "$pal" < /dev/null >>"$LOGFILE" 2>&1
+}
+
+webglass_apps() {
+  # The web apps whose UI is Enact/Sandstone and which draw as transparent
+  # overlays: the full Settings app and the Notification Centre.
+  printf '%s\n' com.palm.app.settings com.webos.app.notificationcenter
+}
+
+webglass_set() {
+  # $1 = on|off.
+  #
+  # WebAppMgr loads webOSUserScripts/userScript.js from an app's own directory
+  # into that app's page. /usr is a lowerdir-only overlay and cannot gain a new
+  # file, so each app directory gets its own overlay mount: LG's directory as
+  # the lower layer, ours as the upper. That adds the script and the stylesheet
+  # and nothing else - no copy of a 23MB bundle, and unmounting restores the
+  # stock app exactly.
+  mode="$1"
+  rc=0
+  for app in $(webglass_apps); do
+    target="/usr/palm/applications/$app"
+    [ -d "$target" ] || continue
+    up="$WEBGLASS_STAGE/$app/upper/webOSUserScripts"
+    work="$WEBGLASS_STAGE/$app/work"
+    drain_umount "$target"
+    if [ "$mode" = on ]; then
+      mkdir -p "$up" "$work" 2>/dev/null || { rc=1; continue; }
+      cp -f "$WEBGLASS_SRC/userScript.js" "$up/userScript.js" 2>/dev/null || rc=1
+      cp -f "$WEBGLASS_SRC/lumaglass.css" "$up/lumaglass.css" 2>/dev/null || rc=1
+      python3 "$PALETTE_TOOL" "$THEME_DIR/theme.json" css < /dev/null > "$up/theme.css" 2>>"$LOGFILE" || rc=1
+      # The same font the Home screen uses, beside the stylesheet that asks for
+      # it: a web app can only load a face from its own directory.
+      for f in Manrope-Medium.ttf Manrope-SemiBold.ttf Manrope-Bold.ttf; do
+        cp -f "$FONTS_SRC/$f" "$up/$f" 2>/dev/null || rc=1
+      done
+      mount -t overlay lumaglass -o \
+        "lowerdir=$target,upperdir=$WEBGLASS_STAGE/$app/upper,workdir=$work" \
+        "$target" 2>>"$LOGFILE" || rc=1
+    fi
+    # Either way the running instance holds the old page; closing it means the
+    # next launch builds against what is mounted now.
+    luna-send -n 1 luna://com.webos.applicationManager/closeByAppId \
+      "{\"id\":\"$app\"}" >/dev/null 2>&1
+  done
+  return $rc
+}
+
+verb_webglass() {
+  case "${1:-status}" in
+    on|off)
+      take_mutation_lock || { emit_error "another mutation is in progress"; return 1; }
+      if webglass_set "$1"; then
+        [ "$1" = on ] && : > "$WEBGLASS_ON" || rm -f "$WEBGLASS_ON"
+        log_line "webglass $1"
+        printf '{"ok":true,"webglass":"%s"}\n' "$1"
+      else
+        emit_error "could not switch the settings apps to $1"
+        return 1
+      fi
+      ;;
+    status)
+      n=0
+      for app in $(webglass_apps); do
+        is_mounted "/usr/palm/applications/$app" && n=$((n+1))
+      done
+      printf '{"ok":true,"mounted":%s}\n' "$n"
+      ;;
+    *) emit_error "usage: webglass on|off|status"; return 1 ;;
+  esac
+  return 0
 }
 
 systemui_set() {
@@ -654,6 +747,7 @@ verb_systemui() {
     on|off)
       take_mutation_lock || { emit_error "another mutation is in progress"; return 1; }
       if systemui_set "$1"; then
+        [ "$1" = on ] && : > "$SYSTEMUI_ON" || rm -f "$SYSTEMUI_ON"
         log_line "systemui $1"
         printf '{"ok":true,"systemui":"%s","main":%s}\n' "$1" "$(python3 "$SYSTEMUI_TOOL" status < /dev/null 2>/dev/null || echo null)"
       else
@@ -989,6 +1083,13 @@ verb_apply() {
   kf_changed=1
   [ "$(md5sum < "$KEYFILTER_SRC" 2>/dev/null)" = "$(md5sum < "$KEYFILTER_DIR/lumaglass.js" 2>/dev/null)" ] && kf_changed=0
   keyfilter_set add || log_line "apply: could not register the key filter with configd"
+
+  # The settings menus are re-asserted here, not just when the verb is run: the
+  # configd redirect survives a reboot but the staged tree has to be rebuilt
+  # after a firmware update, and the overlay mounts are gone after every boot.
+  # Both are no-ops when they are already in place.
+  [ -f "$SYSTEMUI_ON" ] && { systemui_set on || log_line "apply: could not point Quick Settings at the staged tree"; }
+  [ -f "$WEBGLASS_ON" ] && { webglass_set on || log_line "apply: could not mount the settings-app stylesheet"; }
 
   # What the compositor reads (QML, wallpaper) is tracked apart from the rest
   # of the set: a running compositor that already has the shadow only needs a
@@ -1555,6 +1656,7 @@ case "$VERB" in
   log) verb_log "${2:-}"; exit $? ;;
   theme) verb_theme "${2:-get}" "${3:-}"; exit $? ;;
   systemui) verb_systemui "${2:-status}"; exit $? ;;
+  webglass) verb_webglass "${2:-status}"; exit $? ;;
   version) verb_version; exit $? ;;
   *) emit_error "unknown verb: $VERB"; exit 1 ;;
 esac

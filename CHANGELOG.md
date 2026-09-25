@@ -22,6 +22,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   to 51 samples. The replacement evaluates the shadow analytically from the
   signed distance to a rounded box: one pass, no texture read, and no repaint
   when the item it sits behind animates.
+- The settings menus wear the LumaGlass material. Quick Settings is a floating
+  sheet, inset from the screen edges and rounded on every corner, with glass
+  tiles and header buttons; focus lifts a surface rather than inverting it to a
+  light fill. `tools/systemui_patch.py` applies this to the staged copy, and
+  fails loudly on a missing anchor so a firmware update cannot half-patch it.
+- `lumaglass webglass on|off|status` gives the same treatment to the two web
+  settings surfaces, Settings and Notification Centre. WebAppMgr injects
+  `webOSUserScripts/userScript.js` from an app's own directory, so each app
+  gets an overlay mount whose upper layer holds just that script, the
+  stylesheet and the font - no copy of a 23MB bundle, and unmounting restores
+  the stock app exactly.
+- `tools/palette.py` derives the menu palette from `theme.json`, so the menus
+  are tinted by the wallpaper and theme in use. A contrast guard darkens or
+  lightens the derived sheet until its body text clears 7:1 against it, which
+  is what keeps a pale theme from producing an unreadable menu.
+- Quick Settings is kept between opens. Stock rebuilt the whole panel on every
+  open, and the build blocked the open transition: one frozen frame of
+  236-357ms where the panel's own 180ms pause and 150ms slide should have run,
+  so the menu snapped into place instead of sliding. A panel that has finished
+  its data pass is retained with its subscriptions live, and the compositor
+  releases it when its close timer expires. Measured after: on screen 169ms
+  after the key, complete at 505ms, no frame over 20ms.
 
 ### Changed
 

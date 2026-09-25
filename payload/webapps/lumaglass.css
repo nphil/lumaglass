@@ -1,0 +1,417 @@
+/* Typography: the same face the Home screen uses, so the menus and the cards
+ * read as one product. Sandstone stays in the stack for anything Manrope does
+ * not cover, and LG's dingbat font must stay too - the arrows and glyphs in
+ * these panels are private-use codepoints that live only in it.
+ */
+@font-face {
+  font-family: "Manrope";
+  font-weight: 400 500;
+  font-display: block;
+  src: url("Manrope-Medium.ttf") format("truetype");
+}
+
+@font-face {
+  font-family: "Manrope";
+  font-weight: 600;
+  font-display: block;
+  src: url("Manrope-SemiBold.ttf") format("truetype");
+}
+
+@font-face {
+  font-family: "Manrope";
+  font-weight: 700;
+  font-display: block;
+  src: url("Manrope-Bold.ttf") format("truetype");
+}
+
+/* Named per text component rather than applied to everything Enact renders.
+ * Icons in these panels are glyphs in LG's own dingbat font at private-use
+ * codepoints, which no text face can substitute: a blanket override turns every
+ * icon into a tofu box, and CSS revert cannot bring the author's rule back. */
+html, body,
+[class*="Item_content"],
+[class*="Item_label"],
+[class*="Heading_heading"],
+[class*="BodyText_bodyText"],
+[class*="Header_title"],
+[class*="Header_subtitle"],
+[class*="Button_client"],
+[class*="Marquee_text"],
+[class*="Picker_item"],
+[class*="Input_input"] {
+  font-family: "Manrope", "Sandstone", sans-serif !important;
+}
+
+/* LumaGlass for webOS's Enact/Sandstone settings surfaces.
+ *
+ * Settings and Notification Centre are transparent overlay web apps drawn over
+ * whatever is on screen, which is why they can be glass at all: the panel fills
+ * are translucent and the compositor is already showing Home or the picture
+ * behind them.
+ *
+ * Performance rules this file keeps to, because these panels animate while
+ * scrolling long lists on a TV SoC:
+ *   - no backdrop-filter. It forces a readback of everything behind the
+ *     element on every frame it is composited, which is the single most
+ *     expensive thing a translucent UI can ask for.
+ *   - no box-shadow on anything that repeats (rows, buttons). One soft shadow
+ *     on the panel itself is a single cached raster; a shadow per row is not.
+ *   - transitions only on transform and opacity, so focus movement stays on
+ *     the compositor and never triggers layout or paint.
+ *   - no filter, no blur, no mix-blend-mode.
+ *
+ * Class names are Enact's, hashed per build (enact_sandstone_Item_item__x7Kd2),
+ * so everything matches on a substring and survives a rebuild.
+ */
+
+:root {
+  --luma-ink: #F2EFF6;
+  --luma-ink-2: rgba(242, 239, 246, 0.66);
+  --luma-glass: rgba(36, 30, 51, 0.35);
+  --luma-glass-edge: rgba(255, 255, 255, 0.12);
+  --luma-sheet-top: rgba(31, 24, 50, 0.94);
+  --luma-sheet-bottom: rgba(18, 14, 26, 0.91);
+  --luma-focus: rgba(242, 237, 232, 0.98);
+  --luma-focus-ink: #17131F;
+  --luma-radius-sheet: 34px;
+  --luma-radius-row: 22px;
+  --luma-radius-pill: 999px;
+}
+
+/* Sandstone is themed through its own custom properties, and every component
+ * reads them, so setting these is worth more than any number of selectors:
+ * panes, alerts, pickers and controls that this file never names still come out
+ * in the right colours. Values are RGB triples because Sandstone composes them
+ * with its own alphas.
+ */
+:root,
+[class*="ThemeDecorator_theme"] {
+  --sand-bg-color: transparent;
+  --sand-fullscreen-bg-color: transparent;
+  --sand-component-bg-color: rgba(36, 30, 51, 0.35);
+  --sand-overlay-bg-color-rgb: 24, 18, 38;
+  --sand-alert-overlay-bg-color-rgb: 24, 18, 38;
+  --sand-overlay-outline-color: rgba(255, 255, 255, 0.14);
+
+  --sand-text-color-rgb: 242, 239, 246;
+  --sand-text-sub-color: rgba(242, 239, 246, 0.66);
+  --sand-component-text-color-rgb: 242, 239, 246;
+  --sand-component-text-sub-color-rgb: 242, 239, 246;
+
+  /* Focus stays light: Sandstone pairs it with a dark text token, and every
+   * icon in the app is drawn to sit on it. */
+  --sand-focus-bg-color: rgba(242, 237, 232, 0.98);
+  --sand-focus-bg-color-rgb: 242, 237, 232;
+  --sand-component-focus-text-color-rgb: 23, 19, 31;
+
+  --sand-selected-color-rgb: 167, 155, 245;
+  --sand-toggle-on-bg-color: #A79BF5;
+  --sand-toggle-on-color: #F2EFF6;
+  --sand-toggle-off-bg-color: rgba(255, 255, 255, 0.16);
+  --sand-checkbox-color: #A79BF5;
+  --sand-spinner-color: #A79BF5;
+  --sand-progress-color-rgb: 167, 155, 245;
+  --sand-progress-bg-color-rgb: 255, 255, 255;
+  --sand-progress-bg-color-alpha: 0.16;
+  --sand-shadow-color-rgb: 0, 0, 0;
+}
+
+/* ---------------------------------------------------------------- sheets */
+
+/* The app draws over Home or over live picture, so its own page must not put a
+ * wall behind the panels. */
+html, body, #root, [class*="ThemeDecorator_theme"] {
+  background: transparent !important;
+}
+
+/* A scrim of our own, because these apps do not always draw one: enough to
+ * settle what is behind the sheets, little enough that Home is still legible
+ * and you can see where you are. One fixed quad, no filter, so it costs a
+ * single composited layer and never repaints.
+ */
+body::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  background: var(--luma-scrim, rgba(18, 14, 26, 0.42));
+  pointer-events: none;
+  z-index: 0;
+}
+
+[class*="scrimTranslucent"],
+[class*="FloatingLayer_scrim"] {
+  background: var(--luma-scrim, rgba(18, 14, 26, 0.42)) !important;
+}
+
+/* Exactly one element per group carries the fill.
+ *
+ * Sandstone nests its containers - a TabGroup inside TabLayout's tabs, a Panel
+ * inside a Panels viewport, a Panels inside a PopupTabLayout - so styling more
+ * than one of them draws the same sheet twice, a few pixels apart: two fills,
+ * two hairlines and two shadows, which reads as a doubled edge. The reset that
+ * follows this rule flattens every nested match, and being later in the file it
+ * wins at equal specificity.
+ */
+[class*="TabLayout_tabs"],
+[class*="PopupTabLayout_panel"],
+[class*="FlexiblePopupPanels_panel"],
+[class*="Panels_panel"],
+[class*="Popup_popup"],
+[class*="Alert_alert"],
+[class*="ContextualPopup_contextualPopup"],
+[class*="ContextualPopup_container"] {
+  /* A flat tint, not a gradient. A vertical gradient is relative to each
+   * element's own height, so the short tab rail showed mostly its light end
+   * while the full-height pane beside it showed the dark one - two panes of
+   * visibly different colour. The lift comes from the inset highlight instead,
+   * which does not depend on how tall the surface is.
+   *
+   * One shadow, on one element. A shadow per row would be a raster per row,
+   * repainted on every scroll. */
+  background: var(--luma-sheet-bottom) !important;
+  border: 1px solid var(--luma-glass-edge) !important;
+  border-radius: var(--luma-radius-sheet) !important;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.07),
+    0 24px 64px rgba(0, 0, 0, 0.55) !important;
+  overflow: hidden !important;
+}
+
+/* The rail and the pane read as two floating panes rather than one slab split
+ * by a line - the same grouping the Home cards use. The gap comes from the
+ * rail's own inset: shifting the panes instead pushed the help pane that opens
+ * beside a settings list off the right edge of the screen. */
+
+/* The rail sits clear of the screen edge, so its corners are visible and it
+ * reads as a floating pane rather than something anchored off-screen. */
+[class*="TabLayout_tabs"] {
+  margin-left: 24px !important;
+}
+
+/* Anything nested inside a painted surface is part of it. */
+[class*="PopupTabLayout_popup"],
+[class*="FlexiblePopupPanels_popup"],
+[class*="TabGroup_tabGroup"],
+[class*="_tabs"] [class*="_panel"],
+[class*="_panel"] [class*="_panel"],
+[class*="_popup"] [class*="_popup"],
+[class*="_panel"] [class*="_popup"],
+/* Notification Centre nests a Panels panel inside a plain Popup, and that
+ * popup is painted here - so the panel inside it must not be. The tabbed
+ * Settings layout is the other way round: its PopupTabLayout popup is flat and
+ * the panel inside carries the fill. */
+[class*="Popup_popup"] [class*="_panel"],
+[class*="PopupTabLayout_body"],
+[class*="PopupTabLayout_content"],
+[class*="FlexiblePopupPanels_body"],
+[class*="Panels_viewport"],
+[class*="Popup_body"],
+[class*="Popup_inner"] {
+  background: transparent !important;
+  border: 0 !important;
+  box-shadow: none !important;
+  margin-left: 0 !important;
+}
+
+/* ----------------------------------------------------------------- rows */
+
+/* Both states are written out, because these components do not all read the
+ * Sandstone colour tokens: the tab buttons' background computes to LG's literal
+ * grey (measured: rgb(62, 69, 77)) whatever the tokens say. Styling only the
+ * resting state pinned focus to it as well, and a settings row with no visible
+ * focus is unusable from a sofa. */
+[class*="Item_bg"],
+[class*="RadioItem_bg"],
+[class*="CheckboxItem_bg"],
+[class*="SwitchItem_bg"],
+[class*="Button_bg"],
+[class*="TabGroup_bg"] {
+  background: var(--luma-glass) !important;
+  border: 1px solid var(--luma-glass-edge) !important;
+  border-radius: var(--luma-radius-row) !important;
+}
+
+:focus > [class*="_bg"],
+:focus [class*="_bg"],
+[class*="_selected"] [class*="_bg"],
+[class*="_selected"] > [class*="_bg"] {
+  /* Raised glass, not an outline and not an inverted fill: a brighter pane of
+   * the same material, a lit top edge from the inset highlight, and a shadow
+   * underneath to separate it from the sheet. Content stays light, so nothing
+   * has to be redrawn dark for it. */
+  background: var(--luma-focus) !important;
+  border-color: var(--luma-focus-edge) !important;
+  /* Kept soft on purpose: a heavy highlight and a hard shadow read as a solid
+   * button rather than as glass lifted off the sheet. */
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.16),
+    0 8px 20px rgba(0, 0, 0, 0.28) !important;
+}
+
+/* Content on a lifted surface stays light, and is stated explicitly because
+ * Sandstone would otherwise pair its own focus colour with a dark token. */
+:focus,
+:focus *,
+[class*="TabGroup_tab"][class*="_selected"],
+[class*="TabGroup_tab"][class*="_selected"] * {
+  color: var(--luma-focus-ink) !important;
+}
+
+[class*="Item_item"],
+[class*="TabGroup_tab"] {
+  color: var(--luma-ink) !important;
+  border-radius: var(--luma-radius-row) !important;
+  /* Focus moves by transform alone - no layout, no repaint. */
+  transition: transform 150ms cubic-bezier(0.22, 1, 0.36, 1) !important;
+}
+
+[class*="Item_label"] {
+  color: var(--luma-ink-2) !important;
+}
+
+/* Focus lifts, the way a LumaGlass tile does.
+ *
+ * The fill goes on the focused element itself as well as on Sandstone's inner
+ * background node: which of the two actually paints varies by component, and a
+ * settings row with no visible focus is unusable on a remote. */
+[class*="Item_item"]:focus,
+[class*="_item"]:focus {
+  border-radius: var(--luma-radius-row) !important;
+}
+
+[class*="Item_item"]:focus,
+[class*="TabGroup_tab"]:focus,
+[class*="Button_button"]:focus,
+[class*="TabGroup_tab"][class*="_selected"] {
+  transform: scale(1.02);
+}
+
+/* Sandstone fills the focused node itself from --sand-focus-bg-color; all that
+ * is needed here is to drop the hairline, which would otherwise outline a solid
+ * light fill. */
+[class*="Item_item"]:focus [class*="Item_bg"],
+[class*="RadioItem_item"]:focus [class*="_bg"],
+[class*="CheckboxItem_item"]:focus [class*="_bg"],
+[class*="TabGroup_tab"]:focus [class*="_bg"] {
+  border-color: transparent !important;
+}
+
+[class*="Item_item"]:focus,
+[class*="Item_item"]:focus [class*="Item_content"],
+[class*="Item_item"]:focus [class*="Item_label"],
+[class*="TabGroup_tab"]:focus {
+  color: var(--luma-focus-ink) !important;
+}
+
+/* -------------------------------------------------------------- buttons */
+
+[class*="Button_bg"] {
+  border-radius: var(--luma-radius-pill) !important;
+}
+
+[class*="Button_button"] {
+  color: var(--luma-ink) !important;
+  transition: transform 150ms cubic-bezier(0.22, 1, 0.36, 1) !important;
+}
+
+[class*="Button_button"]:focus {
+  transform: scale(1.04);
+}
+
+[class*="Button_button"]:focus [class*="Button_bg"] {
+  border-color: transparent !important;
+}
+
+[class*="Button_button"]:focus [class*="Button_client"],
+[class*="Button_button"]:focus [class*="Button_icon"] {
+  color: var(--luma-focus-ink) !important;
+}
+
+/* --------------------------------------------------------- type & chrome */
+
+[class*="Header_header"],
+[class*="Header_title"] {
+  background: transparent !important;
+  color: var(--luma-ink) !important;
+}
+
+[class*="Heading_heading"] {
+  color: var(--luma-ink) !important;
+}
+
+[class*="BodyText_bodyText"] {
+  color: var(--luma-ink-2) !important;
+}
+
+/* Controls pick up the accent rather than LG's flat white. */
+[class*="Switch_selected"] [class*="Switch_bg"],
+[class*="Slider_fill"],
+[class*="ProgressBar_fill"] {
+  background: #A79BF5 !important;
+}
+
+[class*="Switch_bg"] {
+  background: rgba(255, 255, 255, 0.16) !important;
+}
+
+/* Edge-anchored popups sit flush against the screen, which cuts off the corners
+ * they were just given. A transform lifts them clear without touching layout,
+ * so nothing reflows and the shift stays on the compositor. */
+[class*="Popup_popup"][class*="Popup_left"]   { transform: translateX(24px) !important; }
+[class*="Popup_popup"][class*="Popup_right"]  { transform: translateX(-24px) !important; }
+
+/* A drawer that runs the full height of the screen has its corners cut off by
+ * the screen edge, and with one notification in it most of that height is
+ * empty. Inset top and bottom, and let it size to its content up to what is
+ * left, so it reads as a sheet rather than a wall. */
+[class*="Popup_popup"][class*="Popup_left"],
+[class*="Popup_popup"][class*="Popup_right"] {
+  top: 24px !important;
+  bottom: auto !important;
+  height: auto !important;
+  max-height: calc(100% - 48px) !important;
+}
+
+/* The drawer's height comes from FixedPopupPanels, which asks for a fixed 960px
+ * whatever is in it (measured), so a single notification sat in a sheet with
+ * two thirds of it empty. Sizing to content with a ceiling keeps a long list
+ * scrolling exactly as before. */
+/* Its parent is a flex container, so the drawer is stretched to full height
+ * however short its content is; height alone cannot win against that. */
+[class*="Popup_inner"] {
+  align-items: flex-start !important;
+}
+
+[class*="FixedPopupPanels_narrow"],
+[class*="FixedPopupPanels_body"],
+[class*="FixedPopupPanels_panel"],
+[class*="FixedPopupPanels_content"],
+[class*="Popup_popup"][class*="Popup_left"],
+[class*="Popup_popup"][class*="Popup_right"] {
+  height: max-content !important;
+  min-height: 0 !important;
+  max-height: calc(100vh - 48px) !important;
+}
+
+[class*="Popup_popup"][class*="Popup_left"] > [class*="_body"],
+[class*="Popup_popup"][class*="Popup_right"] > [class*="_body"],
+[class*="Popup_popup"][class*="Popup_left"] [class*="_inner"],
+[class*="Popup_popup"][class*="Popup_right"] [class*="_inner"] {
+  height: auto !important;
+  max-height: calc(100vh - 48px) !important;
+}
+[class*="Popup_popup"][class*="Popup_top"]    { transform: translateY(24px) !important; }
+[class*="Popup_popup"][class*="Popup_bottom"] { transform: translateY(-24px) !important; }
+
+/* The help pane that slides in beside a settings list is a ContextualPopup, and
+ * it is drawn light by default - white text on a near-white panel once the rest
+ * of the app went dark. It gets the same glass, and its little arrow is dropped
+ * rather than left pointing at a surface that no longer matches it. */
+[class*="ContextualPopup_contextualPopup"] {
+  color: var(--luma-ink) !important;
+}
+
+[class*="ContextualPopup_arrow"],
+[class*="ContextualPopup_arrowFill"] {
+  display: none !important;
+}
