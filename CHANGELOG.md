@@ -37,16 +37,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   are tinted by the wallpaper and theme in use. A contrast guard darkens or
   lightens the derived sheet until its body text clears 7:1 against it, which
   is what keeps a pale theme from producing an unreadable menu.
-- The panel's open cost is measured and documented, not yet fixed. Stock
-  rebuilds the whole view on every open, and the build blocks the open
-  transition: one frozen frame of 236-357ms where the panel's own 180ms pause
-  and 150ms slide should run, so the menu snaps into place instead of sliding.
-  Retaining the built view removes it (169ms to screen against 508ms, nothing
-  over 20ms), but an in-process system UI can only stand down by exiting, so a
-  retained panel leaves its view container in the foreground state and the
-  compositor then refuses the next launch - the settings button stops opening
-  anything. The retention patch is kept in tools/systemui_patch.py, disabled,
-  with what it needs to become safe.
+- Quick Settings stays built between opens, the way the volume OSD does.
+  Stock rebuilds the whole panel from 165 QML files on every press: 420ms from
+  the key to the open transition, which then waits another 180ms and runs
+  stretched under the build, fully open at 860ms. A close the panel makes
+  itself (back, the settings key again) now stands it down to the view
+  container's `background` state instead of exiting, which keeps the
+  lifecycle at launch, so the next press relaunches the same instance: open
+  transition 10ms after the launch, fully open at 170ms. A close from outside
+  (Home, power, another app) still exits as stock, because the manager
+  refuses to relaunch an app whose last event was a close; the first press
+  after one is a normal cold open. Compositor RSS is flat across 40 relaunches.
 
 ### Changed
 

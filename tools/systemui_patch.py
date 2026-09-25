@@ -8,8 +8,9 @@ Two kinds of change:
     blocks the open transition - measured as one frozen frame of 236-357ms
     where the panel's own 180ms pause and 150ms slide should have run, so the
     menu snapped into place instead of sliding. A panel that has completed its
-    data pass is kept instead, with its subscriptions live, and a re-open is
-    the transition only: on screen in 169ms with no frame over 20ms.
+    data pass stands down to the view container's background state instead of
+    exiting, with its subscriptions live, and a re-open is the transition only:
+    fully open 170ms after the launch.
 
   * Look. LG's flat slab and grey cards become the same dark glass as the rest
     of LumaGlass: one static gradient, a hairline along the lit edge, rounded
@@ -137,12 +138,26 @@ INSET_TO = '''        source: getSource()
         anchors.leftMargin: xPosition + styler.getRelativeValue(%(inset)d)
         anchors.topMargin: styler.getRelativeValue(%(inset)d)'''
 
-# Retention: keep a panel that has finished its data pass.
+# Residency. The volume OSD is built once and only shown per press; Quick
+# Settings is rebuilt from 165 QML files on every press, ~420ms from the key to
+# its open transition. Here a panel that has finished its data pass stays
+# built, the way the OSD does.
+#
+# How it stands down matters. The only stand-down stock has is exit, and the
+# manager refuses to launch an app whose last lifecycle event was a close until
+# the container is destroyed - keeping the item alive past a close left the
+# settings button dead. The container's own "background" state is the one that
+# works: it hides the item, releases focus, closes the overlay view and drops
+# the panel from the foreground-app list, while the lifecycle stays at launch,
+# so the next press is accepted as a relaunch of the same instance.
 READY_FLAG_FROM = "    property alias uiController: uiController"
 READY_FLAG_TO = '''    property alias uiController: uiController
     // LumaGlass: true once the one-time data pass has run. A preloaded
     // instance reaches "ready" without it, and is not worth keeping.
-    property bool lumaDataReady: false'''
+    property bool lumaDataReady: false
+    // True for an open that reuses the built panel, which has nothing left to
+    // wait for and so skips the transition's opening pause.
+    property bool lumaWarmOpen: false'''
 
 READY_SET_FROM = '''            systemProperties.isAppReadyToUse = true;
         }
@@ -163,17 +178,26 @@ EXIT_FROM = '''    function exitApp() {
         root.exit();
     }'''
 EXIT_TO = '''    function exitApp() {
-        // A retained panel keeps its subscriptions. Cancelling them here made
-        // the next open pay to re-subscribe every interface, which is a frozen
-        // frame of its own.
-        if(!systemProperties.isPreload && !lumaDataReady) {
+        // LumaGlass: a close the panel made itself (back, the settings key
+        // again, a tile that hands off) stands down and stays built, with its
+        // subscriptions live. The container is in foreground then, or in
+        // launching when the close is the settings key's second press. A close
+        // from outside - the container already closing: power, Home, another
+        // app - exits as stock, so the manager never holds a closed app it
+        // would refuse to relaunch. A panel with a popup or edit mode still up
+        // exits too rather than reopening into it.
+        var view = uiController.mainView;
+        var standing = root.parent ? root.parent.state : "";
+        if (lumaDataReady && !systemProperties.isPreload && view
+                && (standing === "foreground" || standing === "launching")
+                && !view.showMenuPopup && !view.showCandidateList && !view.showEditOptBox
+                && !view.showControlSliderPopup && !view.showDeleteDecisionPopup && !view.editEnabled) {
+            root.parent.gotoState("background");
+            return;
+        }
+        if(!systemProperties.isPreload) {
             cancel();
         }
-        // Exiting releases the view, and the rebuild on the next open is what
-        // blocks the open transition. The compositor still releases the panel
-        // once delayCloseWindowTimeout expires, so a long idle reclaims it.
-        if (lumaDataReady)
-            return;
         root.exit();
     }'''
 
@@ -186,21 +210,30 @@ LAUNCH_FROM = '''                if(container.systemProperties.isPreload) {
 LAUNCH_TO = '''                if(container.systemProperties.isPreload) {
                     container.launchAppAfterPreload = true;
                 } else if(container.lumaDataReady && container.uiController.mainView) {
-                    // Retained: built, populated and still subscribed, so this
-                    // is the open transition and the hotkey selection, nothing
-                    // more. Stock rebuilt the view here.
+                    // LumaGlass: resident. Built, populated and subscribed, so
+                    // this is focus back on the first tile and the open
+                    // transition, nothing more.
+                    var view = container.uiController.mainView;
                     container.systemProperties.launchParams = payload.params;
+                    container.lumaWarmOpen = true;
+                    view.mainList.currentIndex = 0;
+                    view.mainList.forceActiveFocus();
                     root.show();
-                    container.uiController.mainView.startMainView();
+                    view.startMainView();
                 } else {
                     root.show();
                     container.open(payload.params, true);
                 }'''
 
-# How long the compositor keeps a closed panel before releasing it. Stock is
-# 1s, which is a teardown on every close.
-TIMEOUT_FROM = "setWindowProperty('delayCloseWindowTimeout', 1000)"
-TIMEOUT_TO = "setWindowProperty('delayCloseWindowTimeout', 900000)"
+# The open transition waits 180ms before it starts, which covers the rebuild on
+# a cold open. A resident panel has nothing to cover.
+PAUSE_FROM = '''                PauseAnimation {
+                    duration: 180
+                }'''
+PAUSE_TO = '''                PauseAnimation {
+                    // LumaGlass: only a cold open has a build to hide.
+                    duration: rootWindow.lumaWarmOpen ? 0 : 180
+                }'''
 
 # Every button, list row, popup and card in the panel - not just the tokens in
 # Style.qml. LG hardcodes these fills in the component files themselves, so the
@@ -343,18 +376,10 @@ edit(root / "Component" / "BaseControlPanelButton.qml",
      [(TILE_LIFT_FROM, TILE_LIFT_TO), (TILE_EDGE_FROM, TILE_EDGE_TO)])
 edit(root / "Component" / "ImageButton.qml", [(ICON_BUTTON_FROM, ICON_BUTTON_TO)])
 edit(root / "Component" / "ControlPanelImageButton.qml", [(ICON_SWAP_FROM, ICON_SWAP_TO)], required=False)
-# Retention is deliberately not applied.
-#
-# Keeping the panel alive across a close does remove the rebuild - measured at
-# 169ms to screen against 508ms, with no frame over 20ms - but it leaves the
-# compositor's view container in its foreground state, because the only way an
-# in-process system UI can stand down is to exit. The manager then rejects the
-# next launch outright ("event is not accepted: type=launch") and the settings
-# button on the remote stops opening anything at all.
-#
-# A working version has to hand the container a state it accepts while keeping
-# the loaded item, which means changing the container, not just the app. Until
-# then the panel is rebuilt per open, as stock.
+edit(root / "QuickSettingsMain.qml",
+     [(READY_FLAG_FROM, READY_FLAG_TO), (READY_SET_FROM, READY_SET_TO), (EXIT_FROM, EXIT_TO)])
+edit(root / "QuickSettings.qml", [(LAUNCH_FROM, LAUNCH_TO)])
+edit(root / "Controllers" / "UIController.qml", [(PAUSE_FROM, PAUSE_TO)])
 
 # Then the fills, across every component and container in the panel.
 for qml in sorted((root / "Component").glob("*.qml")) + sorted((root / "Containers").rglob("*.qml")):
