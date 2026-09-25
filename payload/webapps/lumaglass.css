@@ -1,27 +1,39 @@
-/* Typography: the same face the Home screen uses, so the menus and the cards
- * read as one product. Sandstone stays in the stack for anything Manrope does
- * not cover, and LG's dingbat font must stay too - the arrows and glyphs in
- * these panels are private-use codepoints that live only in it.
+/* Typography.
+ *
+ * Inter: a neutral grotesque drawn for screens, with open apertures and a tall
+ * x-height that hold up at three metres. Display cut for the large titles,
+ * where the tighter spacing is what it was drawn for.
+ *
+ * Sandstone stays as the fallback, and LG's dingbat font is never overridden -
+ * the arrows and icons in these panels are private-use codepoints that live
+ * only in it, so a blanket font rule turns every icon into a tofu box.
  */
 @font-face {
-  font-family: "Manrope";
-  font-weight: 400 500;
+  font-family: "LumaSans";
+  font-weight: 400;
   font-display: block;
-  src: url("Manrope-Medium.ttf") format("truetype");
+  src: url("Inter-Regular.ttf") format("truetype");
 }
 
 @font-face {
-  font-family: "Manrope";
-  font-weight: 600;
+  font-family: "LumaSans";
+  font-weight: 500;
   font-display: block;
-  src: url("Manrope-SemiBold.ttf") format("truetype");
+  src: url("Inter-Medium.ttf") format("truetype");
 }
 
 @font-face {
-  font-family: "Manrope";
-  font-weight: 700;
+  font-family: "LumaSans";
+  font-weight: 600 700;
   font-display: block;
-  src: url("Manrope-Bold.ttf") format("truetype");
+  src: url("Inter-SemiBold.ttf") format("truetype");
+}
+
+@font-face {
+  font-family: "LumaDisplay";
+  font-weight: 600 700;
+  font-display: block;
+  src: url("InterDisplay-SemiBold.ttf") format("truetype");
 }
 
 /* Named per text component rather than applied to everything Enact renders.
@@ -39,7 +51,33 @@ html, body,
 [class*="Marquee_text"],
 [class*="Picker_item"],
 [class*="Input_input"] {
-  font-family: "Manrope", "Sandstone", sans-serif !important;
+  font-family: "LumaSans", "Sandstone", sans-serif !important;
+  letter-spacing: 0.005em !important;
+}
+
+/* LG sets semibold for body rows, which is heavy at this size and at this
+ * distance - Inter's medium carries the same legibility with far less weight
+ * on screen. Titles keep the heavier cut so the hierarchy still reads. */
+[class*="Item_content"],
+[class*="Button_client"],
+[class*="Marquee_text"],
+[class*="Picker_item"] {
+  font-weight: 500 !important;
+}
+
+[class*="Item_label"],
+[class*="BodyText_bodyText"],
+[class*="Header_subtitle"] {
+  font-weight: 400 !important;
+}
+
+/* Titles take the display cut and a little negative tracking, which is what
+ * keeps a large line from looking loose beside the body text. */
+[class*="Header_title"],
+[class*="Heading_heading"] {
+  font-family: "LumaDisplay", "LumaSans", "Sandstone", sans-serif !important;
+  font-weight: 600 !important;
+  letter-spacing: -0.01em !important;
 }
 
 /* LumaGlass for webOS's Enact/Sandstone settings surfaces.
@@ -88,9 +126,16 @@ html, body,
 [class*="ThemeDecorator_theme"] {
   --sand-bg-color: transparent;
   --sand-fullscreen-bg-color: transparent;
-  --sand-component-bg-color: rgba(36, 30, 51, 0.35);
-  --sand-overlay-bg-color-rgb: 24, 18, 38;
-  --sand-alert-overlay-bg-color-rgb: 24, 18, 38;
+  /* Transparent: this token fills Sandstone's own panels and rows, and a
+   * second translucent layer on top of the sheet is exactly what made one
+   * part of the app read lighter than another. The sheet is the only fill. */
+  --sand-component-bg-color: transparent;
+  /* Sandstone paints its own overlay fill under popups and panels, at its own
+   * alpha and in its own colour. Left at anything other than the sheet colour
+   * it shows up as a lighter tone over part of the app - which is what made
+   * the tab rail and the pane beside it read as two different backgrounds. */
+  --sand-overlay-bg-color-rgb: 18, 14, 26;
+  --sand-alert-overlay-bg-color-rgb: 18, 14, 26;
   --sand-overlay-outline-color: rgba(255, 255, 255, 0.14);
 
   --sand-text-color-rgb: 242, 239, 246;
@@ -143,6 +188,22 @@ body::before {
   background: var(--luma-scrim, rgba(18, 14, 26, 0.42)) !important;
 }
 
+/* Nothing the app draws paints a background of its own.
+ *
+ * Sandstone fills a dozen nested containers - tab rail, panel, viewport, body,
+ * scroller - each from its own token and at its own alpha, and matching them
+ * one by one never stayed matched: a rail over a bright card and a pane over a
+ * dark one ended up 12 RGB points apart on the same nominal colour. The sheet
+ * above is the only fill; the rules after this one put a surface back exactly
+ * where it carries meaning - focus, selection, switches, sliders, and popups
+ * that genuinely float above the sheet.
+ */
+[class*="enact_"] {
+  /* Colour only. Clearing background-image too took out the app icons in
+   * Notification Centre, which are drawn that way. */
+  background-color: transparent !important;
+}
+
 /* Exactly one element per group carries the fill.
  *
  * Sandstone nests its containers - a TabGroup inside TabLayout's tabs, a Panel
@@ -154,8 +215,12 @@ body::before {
  */
 [class*="TabLayout_tabs"],
 [class*="PopupTabLayout_panel"],
+/* Capital P: Sandstone's own class is Panels_Panel_visible, and this is the
+ * element that fills the right-hand pane - found by hit-testing it. The
+ * lowercase spelling matches only its wrapper and painted nothing, which is
+ * why that side of the app was once just the scrim showing through. */
+[class*="Panels_Panel_"],
 [class*="FlexiblePopupPanels_panel"],
-[class*="Panels_panel"],
 [class*="Popup_popup"],
 [class*="Alert_alert"],
 [class*="ContextualPopup_contextualPopup"],
@@ -188,8 +253,16 @@ body::before {
   margin-left: 24px !important;
 }
 
-/* Anything nested inside a painted surface is part of it. */
+/* Every container the app draws is transparent: the sheet behind them is the
+ * only fill, so no two parts of the app can drift apart in colour. */
 [class*="PopupTabLayout_popup"],
+[class*="PopupTabLayout_content"],
+[class*="Panels_Panel_"],
+[class*="Panels_panel"],
+[class*="FlexiblePopupPanels_panel"],
+[class*="PopupTabLayout_popup"],
+[class*="PopupTabLayout_content"],
+[class*="Panels_panel"],
 [class*="FlexiblePopupPanels_popup"],
 [class*="TabGroup_tabGroup"],
 [class*="_tabs"] [class*="_panel"],
@@ -202,7 +275,6 @@ body::before {
  * the panel inside carries the fill. */
 [class*="Popup_popup"] [class*="_panel"],
 [class*="PopupTabLayout_body"],
-[class*="PopupTabLayout_content"],
 [class*="FlexiblePopupPanels_body"],
 [class*="Panels_viewport"],
 [class*="Popup_body"],
@@ -226,7 +298,11 @@ body::before {
 [class*="SwitchItem_bg"],
 [class*="Button_bg"],
 [class*="TabGroup_bg"] {
-  background: var(--luma-glass) !important;
+  /* Transparent at rest. A resting fill on every tab button lightened the whole
+   * rail against the pane beside it, which has no fill behind its rows -
+   * measured 7 RGB points apart on the same sheet colour. Only focus and
+   * selection are filled, and those are the raised state below. */
+  background: transparent !important;
   border: 1px solid var(--luma-glass-edge) !important;
   border-radius: var(--luma-radius-row) !important;
 }
@@ -244,8 +320,9 @@ body::before {
   /* Kept soft on purpose: a heavy highlight and a hard shadow read as a solid
    * button rather than as glass lifted off the sheet. */
   box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.16),
-    0 8px 20px rgba(0, 0, 0, 0.28) !important;
+    inset 0 1px 0 rgba(255, 255, 255, 0.22),
+    inset 0 -1px 0 rgba(0, 0, 0, 0.22),
+    0 10px 24px rgba(0, 0, 0, 0.32) !important;
 }
 
 /* Content on a lifted surface stays light, and is stated explicitly because

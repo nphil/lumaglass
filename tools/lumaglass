@@ -684,7 +684,7 @@ webglass_set() {
       python3 "$PALETTE_TOOL" "$THEME_DIR/theme.json" css < /dev/null > "$up/theme.css" 2>>"$LOGFILE" || rc=1
       # The same font the Home screen uses, beside the stylesheet that asks for
       # it: a web app can only load a face from its own directory.
-      for f in Manrope-Medium.ttf Manrope-SemiBold.ttf Manrope-Bold.ttf; do
+      for f in Inter-Regular.ttf Inter-Medium.ttf Inter-SemiBold.ttf InterDisplay-SemiBold.ttf; do
         cp -f "$FONTS_SRC/$f" "$up/$f" 2>/dev/null || rc=1
       done
       mount -t overlay lumaglass -o \

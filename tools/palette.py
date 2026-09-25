@@ -117,16 +117,22 @@ while contrast(sheet, ink_rgb) < 7.0 and steps < 20:
 # compositor drew the wallpaper behind it; a settings sheet can be over motion,
 # and text over motion is unreadable at the alphas the Home cards use.
 top = lift(*sheet, 0.06) if luminance(*sheet) < 0.5 else toward(sheet, (0, 0, 0), 0.06)
-sheet_top = argb(*top, 0.94)
-sheet_bottom = argb(*sheet, 0.91)
+# Sheer enough to read as glass over the wallpaper, opaque enough that what is
+# behind one pane cannot tint it differently from the pane beside it.
+sheet_top = argb(*top, 0.93)
+sheet_bottom = argb(*sheet, 0.93)
 # Rows, buttons and cards inside a sheet: sheer, because the sheet is behind them.
 row = argb(*toward(sheet, (255, 255, 255) if luminance(*sheet) < 0.5 else (0, 0, 0), 0.10), 0.35)
 # Focus is the same material, lifted: brighter glass, a stronger edge and a
 # shadow under it, rather than a solid light fill. It keeps the panel reading as
 # one set of surfaces, and it keeps text and icons light, which is what lets the
 # rest of the theme stay dark.
-focus = argb(*toward(sheet, (255, 255, 255) if luminance(*sheet) < 0.5 else (0, 0, 0), 0.16), 0.42)
-focus_edge = argb(255, 255, 255, 0.22) if luminance(*sheet) < 0.5 else argb(0, 0, 0, 0.18)
+# Selection is the same glass, lifted - not a block of another colour. A thin
+# wash of light over the sheet keeps the hue identical, so the only things that
+# separate a selected row from the surface are the lit edge and the shadow
+# under it. Anything more opaque reads as a background swatch sitting on top.
+focus = argb(255, 255, 255, 0.07) if luminance(*sheet) < 0.5 else argb(0, 0, 0, 0.06)
+focus_edge = argb(255, 255, 255, 0.28) if luminance(*sheet) < 0.5 else argb(0, 0, 0, 0.22)
 hairline = argb(er, eg, eb, min(0.22, max(0.10, ea)))
 
 palette = {
