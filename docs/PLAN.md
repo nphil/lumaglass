@@ -123,10 +123,45 @@ cleared on every stage change.
    remote.
 6. Restyles in other processes: Live TV banners, keyboard, search and voice,
    the shared web-app theme.
-7. Removal: nudges, ads and store promotions off; Apps tile to the own grid;
-   Notification Centre to the own drawer.
+7. Removal: nudges, ads and store promotions off; LG's background services
+   off through Glasshouse (below); Apps tile to the own grid; Notification
+   Centre to the own drawer.
 8. Retire LG's Flutter Home, trim background preloads, replace the
-   screensaver. Research first.
+   screensaver. Research first, under the app-manager constraint below.
+
+## Glasshouse
+
+Glasshouse (rorygallagher2024/lg-webos-dashboard) is installed on the set: a
+Node server (`/var/lib/tvweb`, about 34 MB resident) that bridges the TV to
+Home Assistant over MQTT and holds LG's ad and telemetry hosts blocked with a
+bind-mounted `/etc/hosts`. LumaShell coexists with it and does not duplicate
+what it already does.
+
+- Background services. Glasshouse masks LG daemons under
+  `/run/systemd/transient` and holds them down from a boot hook. Running now
+  and switchable there: `uploadd`, `rdxd`, `contentminer`, `nudge`,
+  `remotelogger`. Phase 7 switches them off through Glasshouse rather than a
+  second mechanism; `nudge.service` off stops nudges at the source.
+- App manager restarts. Swapping the screensaver's runtime (Flutter to QML on
+  webOS 10) or hiding system apps through `appinfo.json` bind-mounts needs SAM
+  restarted, and on webOS 10 and 11 that restart has been followed by lost
+  picture, lost ARC sound and dead HDMI-CEC until a power cut (Glasshouse
+  #366). This set sends sound to the Denon over eARC, so LumaShell never
+  restarts SAM: a replacement screensaver either lands before SAM first starts
+  (the early boot hook, if it runs first) or is drawn by the compositor.
+  System apps are hidden in LumaShell's own launcher, not through
+  `appinfo.json`.
+- OLED care. The luna calls Glasshouse uses are a ready source for an OLED
+  care screen in the curated settings: `panelcontroller/getPanelUsageTime`,
+  `tv.display/getClearPanelNoiseStatus` and `requestClearPanelNoise` (Pixel
+  Refresher), `oledepl/getGlobalStressReduction` and `getTemporalPeakControl`,
+  `tv.systemproperty` `OledGSR`/`OledTPC`.
+- Game Optimizer. Its per-input settings (genre, prevent input delay, VRR,
+  FreeSync, ALLM, black stabiliser) and the live VRR refresh readout are
+  candidates for a quick-panel game card.
+- Screensaver designs. Its QML screensavers (clock, starfield, bokeh) keep
+  every element drifting to avoid retention; LumaShell's screensaver follows
+  the same rule.
 
 ## Safety
 
