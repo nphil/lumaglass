@@ -197,7 +197,8 @@ ideas are taken, not its architecture.
 
 1. Foundation: component kit, tokens, Manrope everywhere including the web
    theme, startup warm-up, frame-probe harness, a registry of every surface's
-   state and fallback, the native helper, the disk cache.
+   state and fallback, the native helper, the disk cache, and LumaHome in
+   LG's Home's place (Home stub, see Glasshouse).
 2. Notifications: toasts, alerts, PIN prompt, input popups.
 3. Quick panel and curated settings.
 4. Input picker, the receiver-fed volume and mute OSD, and ambient light.
@@ -208,7 +209,7 @@ ideas are taken, not its architecture.
 7. Removal: nudges, ads and store promotions off; LG's background services
    off through Glasshouse (below); Apps tile to the own grid; Notification
    Centre to the own drawer.
-8. Retire LG's Flutter Home, trim background preloads, replace the
+8. Trim background preloads, replace the
    screensaver. Research first, under the app-manager constraint below.
 
 ## Glasshouse
@@ -260,14 +261,20 @@ what it already does.
   is sent again at each wake. Glasshouse already does this; LumaShell uses it.
   On the set: Netflix, YouTube, Prime Video, the browser and LG Channels are
   enabled.
-- Retiring LG's Home (phase 8): Glasshouse Home runs under LG's Home's id,
-  `com.webos.app.home`, by bind-mounting a staged app over its directory with
-  `appCategory: ["home"]`, then having SAM reread only that app (on webOS 10 a
-  block and release of the one app, not a SAM restart). Home key, Back out of
-  the last app and wake-to-Home then all open it, and LG's 67 MB Flutter Home
-  never starts. LumaShell's version is the smallest app that satisfies SAM
-  while the compositor draws Home. LG's `homeAutoLaunch` is held off while it
-  runs, as Glasshouse does.
+- Retiring LG's Home: tested on the set on 2026-10-22 (webOS 10.2.1). A web
+  stub with `appCategory: ["home"]` and `visible: false`, bind-mounted over
+  `/usr/palm/applications/com.webos.app.home`; `blockSystemApp` then
+  `releaseBlockSystemApp` made SAM report the stub's type within 0.5 s, with
+  `blockedSystemAppList/USA.json` byte-identical afterwards and no SAM
+  restart. Killing LG's Flutter process left the stub in front 3 s later and
+  LumaHome drawing over it. Passed: Home key from YouTube, closing the last
+  app, standby and wake, remote focus in LumaHome, volume to the AVR over
+  eARC, AVR-S760H still listed on HDMI 2. Home's process went from 66-88 MB
+  (Flutter) to 26-29 MB (one WebAppMgr renderer). Reverted by unmounting, the
+  same block and release, and WebAppMgr `killApp`; LG's Home was back in 2 s.
+  Moves into phase 1, with a heartbeat that gives LG's Home back if
+  LumaHome stops drawing, a boot hook that mounts before SAM first starts
+  Home, and LG's `homeAutoLaunch` held off while it is in place.
 - Recent apps: `com.webos.service.recent/listRecents` with snapshots, closing
   with `closeByAppId` (native) or WebAppMgr `killApp` (web) before
   `removeRecent`, since removing the card alone leaves the app running on
