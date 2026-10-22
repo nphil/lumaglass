@@ -171,6 +171,28 @@ Before building, with the set free:
    level shifter, relay) and a 24 V 100 W supply. About 58 sections around
    the 65-inch frame; bottom edge depends on wall mount or stand.
 
+## Reference: ecklf/lg-luma
+
+Luma (MIT, Rust/SDL app) is a separate launcher app that the Home key is
+rerouted to; LumaShell already owns Home inside the compositor, so only its
+ideas are taken, not its architecture.
+
+- Inputs on Home: `com.webos.service.eim/getAllInputStatus` gives each HDMI
+  port's label and `connected` flag. Home gets an Inputs row (label, device
+  icon, connected state), and each input has Auto / Always / Hidden, Auto
+  meaning shown only while something is connected. The same data feeds the
+  input picker.
+- Device icons per input (console, PlayStation, Apple TV, streamer, computer),
+  chosen from the CEC label or by the user.
+- All-apps library for the Apps tile: categories (Streaming, Music, Gaming,
+  Utilities, matched from app id and title), search with the system keyboard,
+  favourites, hide and restore. Luma's filter for what counts as a user app
+  (drop invisible apps and system `com.webos.`/`com.palm.`/`com.lge.` ids
+  unless marked visible; keep Live TV) is a sound starting rule.
+- Key hints along the bottom edge ("OK Open", "Hold OK for options").
+- Icons: Lucide (ISC licence) as the UI icon source, rendered once to the
+  sizes in use, replacing the hand-drawn PNG set.
+
 ## Phases
 
 1. Foundation: component kit, tokens, Manrope everywhere including the web
