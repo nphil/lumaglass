@@ -165,10 +165,11 @@ Before building, with the set free:
    Assistant app). Bifrost is not installed anywhere yet; installing it is
    Nitin's step. It needs its own IP on the LAN, since it answers as a Hue
    Bridge on ports 80 and 443.
-3. Strip: none yet. Target hardware is a 24 V addressable RGBW COB strip
-   (SK6812 or WS2814, neutral white, CRI 90) on a WLED controller, preferably
-   wired Ethernet for steady timing (QuinLED Dig-Uno Ethernet or Dig-Next-2;
-   Gledopto GL-C-015WL-D as the budget option).
+3. Strip, on order: BTF-Lighting FCOB WS2814 RGBW 4000K, 24 V, 5 m (14
+   addressable sections per metre, 71 mm each), BTF 10 mm 3-pin FCOB connector
+   kit for the corners, Gledopto Elite GL-C-618WL (ESP32, WLED, Ethernet,
+   level shifter, relay) and a 24 V 100 W supply. About 58 sections around
+   the 65-inch frame; bottom edge depends on wall mount or stand.
 
 ## Phases
 
