@@ -165,8 +165,10 @@ Before building, with the set free:
    Assistant app). Bifrost is not installed anywhere yet; installing it is
    Nitin's step. It needs its own IP on the LAN, since it answers as a Hue
    Bridge on ports 80 and 443.
-3. Strip: identify the RGBIC strip's controller; reflash to WLED or ESPHome if
-   it has no usable LAN protocol.
+3. Strip: none yet. Target hardware is a 24 V addressable RGBW COB strip
+   (SK6812 or WS2814, neutral white, CRI 90) on a WLED controller, preferably
+   wired Ethernet for steady timing (QuinLED Dig-Uno Ethernet or Dig-Next-2;
+   Gledopto GL-C-015WL-D as the budget option).
 
 ## Phases
 
