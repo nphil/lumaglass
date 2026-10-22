@@ -111,6 +111,63 @@ about 5.8 s to 4.6-5.2 s and does not change cold opens. Adopt through the
 tool, with the cache (6.2 MB, `/home/root/.cache/surface-manager/qmlcache`)
 cleared on every stage change.
 
+## Ambient light
+
+LumaShell reads the colour of whatever the set is showing and drives the Hue
+backlights and an RGBIC strip from it, with no Hue Bridge and no Hue Sync app.
+It works during DRM playback (Netflix, Prime, Disney+), where frame capture
+returns black on webOS 24 and 25.
+
+Source: LG's own `libvtcapture.so.1` (32-bit, `/usr/lib`) has a histogram API
+beside the frame capture: `vtCapture_initHistogram`,
+`vtCapture_setPresetHistogram`, `vtCapture_getHistogram`,
+`vtCapture_finalizeHistogram`. It returns colour statistics for 16 screen
+zones straight from the video hardware. LG's Hue Sync service on the set
+(`com.lighting.huesync.service/hue_sync_service`, read only as a reference)
+`dlopen`s the library and calls exactly these, logging one r/g/b triple per
+zone. hyperion-webos's `HISTOGRAM_OUTPUT` dump location is ordinary frame
+capture, not this API.
+
+Design:
+
+- Capture runs in a small 32-bit process, because LG's library is 32-bit; it
+  `dlopen`s the library as Hue Sync and hyperion-webos do, polls the zones and
+  hands them to the helper. It holds the driver only while there is video and
+  the screen is on, and releases it on standby.
+- The helper maps zones to lights and smooths them. Features taken from
+  HyperHDR as reference: time-based smoothing, brightness and saturation
+  gain, per-light white balance and gamma, a dark threshold so black scenes
+  turn lights low rather than flicker, black-bar handling for letterboxed
+  films, and a delay setting to line light changes up with picture and sound.
+- Hue backlights: Hue Entertainment streaming (HueStream over DTLS, the
+  protocol Hue Sync and HyperHDR's Hue driver use) to Bifrost, which drives
+  the bulbs through Zigbee2MQTT in Zigbee entertainment mode. Plain MQTT light
+  commands are too slow for sync and are not used. Gradient lightstrips take
+  one colour per segment.
+- RGBIC strip: WLED's UDP realtime protocol (DDP), per segment or per LED.
+  ESPHome's WLED effect accepts the same protocol, so an ESPHome strip works.
+  Vendor strips (Govee and similar) depend on their LAN protocol and are
+  checked per model.
+- Controls: an Ambient light tile in the quick panel (on/off, intensity), and
+  a settings screen that places each light around a picture of the TV, with a
+  test pattern. Off on Home and menus unless chosen.
+- Gate: no measurable compositor cost; under 1% CPU for capture; light lag
+  measured end to end and tuned with the delay setting; capture never stalls
+  playback; tested on Netflix, Prime, Disney+, PlxNative, HDMI and Live TV.
+
+Before building, with the set free:
+
+1. Probe: call the four functions during Netflix playback and log the zones;
+   find the zone layout (grid or edges), the value range (8-bit, float,
+   SDR or HDR), the update rate and the CPU cost. The zones come from the
+   video plane, so LumaShell's own UI is likely not in them.
+2. Lights: pair the Hue backlights to Zigbee2MQTT (2.14.2, running as a Home
+   Assistant app). Bifrost is not installed anywhere yet; installing it is
+   Nitin's step. It needs its own IP on the LAN, since it answers as a Hue
+   Bridge on ports 80 and 443.
+3. Strip: identify the RGBIC strip's controller; reflash to WLED or ESPHome if
+   it has no usable LAN protocol.
+
 ## Phases
 
 1. Foundation: component kit, tokens, Manrope everywhere including the web
@@ -118,7 +175,7 @@ cleared on every stage change.
    state and fallback, the native helper, the disk cache.
 2. Notifications: toasts, alerts, PIN prompt, input popups.
 3. Quick panel and curated settings.
-4. Input picker and the receiver-fed volume and mute OSD.
+4. Input picker, the receiver-fed volume and mute OSD, and ambient light.
 5. Launch splash, spinners, boot and power-off logos, context menu, on-screen
    remote.
 6. Restyles in other processes: Live TV banners, keyboard, search and voice,
