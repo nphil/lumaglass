@@ -244,6 +244,38 @@ what it already does.
 - Screensaver designs. Its QML screensavers (clock, starfield, bokeh) keep
   every element drifting to avoid retention; LumaShell's screensaver follows
   the same rule.
+- Version on the set predates Glasshouse Home and Remote keys (no
+  `home.json`, no `glasshouse.remoteKeys`). Both hook what LumaShell owns: the
+  Home key and the first slot of the compositor's key-filter chain. Neither is
+  switched on while LumaShell runs; an update of Glasshouse is checked for
+  that.
+- Key-filter writes: writing `com.webos.surfacemanager.keyFilters` reloads
+  every filter and reruns LG's `init()`, which in Game mode opens the Game
+  Dashboard. Glasshouse keeps one fixed filter file in the chain and passes
+  its settings through a configd value the filter subscribes to. LumaShell's
+  filter does the same and is written to the chain only when absent.
+- Apps kept ready (phase 8): preloads are configd
+  `com.webos.service.preloadmanager.supportAppList`; on webOS 10 the preload
+  manager forgets the stored value at every switch-on, so `setPreloadPolicy`
+  is sent again at each wake. Glasshouse already does this; LumaShell uses it.
+  On the set: Netflix, YouTube, Prime Video, the browser and LG Channels are
+  enabled.
+- Retiring LG's Home (phase 8): Glasshouse Home runs under LG's Home's id,
+  `com.webos.app.home`, by bind-mounting a staged app over its directory with
+  `appCategory: ["home"]`, then having SAM reread only that app (on webOS 10 a
+  block and release of the one app, not a SAM restart). Home key, Back out of
+  the last app and wake-to-Home then all open it, and LG's 67 MB Flutter Home
+  never starts. LumaShell's version is the smallest app that satisfies SAM
+  while the compositor draws Home. LG's `homeAutoLaunch` is held off while it
+  runs, as Glasshouse does.
+- Recent apps: `com.webos.service.recent/listRecents` with snapshots, closing
+  with `closeByAppId` (native) or WebAppMgr `killApp` (web) before
+  `removeRecent`, since removing the card alone leaves the app running on
+  webOS 10. Back on Home opens it.
+- Picture details for the input picker and quick panel: the HDMI signal
+  (resolution, refresh, HDR10/HLG/Dolby Vision, VRR, ALLM) and the picture
+  mode LG keeps for that input and dynamic range.
+- Last opened ordering for rows, and a "what was last on" card on Home.
 
 ## Safety
 
