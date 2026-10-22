@@ -18,8 +18,14 @@ def luna(uri, payload):
 
 
 current = json.loads(luna("luna://com.webos.service.config/getConfigs", {"configNames": [NAME]}))
-entries = [e for e in current["configs"][NAME] if e.get("handler") != handler]
+chain = current["configs"][NAME]
+entries = [e for e in chain if e.get("handler") != handler]
 if mode == "add":
     entries.insert(0, {"handler": handler, "file": path})
+# Every write makes the compositor reload the whole chain and rerun each LG
+# filter's init(), which in Game mode opens the Game Dashboard. Write only on
+# an actual change.
+if entries == chain:
+    sys.exit(0)
 reply = luna("luna://com.webos.service.config/setConfigs", {"configs": {NAME: entries}})
 sys.exit(0 if '"returnValue":true' in reply else 1)

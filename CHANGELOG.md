@@ -51,6 +51,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- The key filter is written to configd only when the chain would change.
+  Each write makes the compositor reload every filter and rerun LG's init(),
+  which in Game mode opens the Game Dashboard.
 - The frame probe reports pacing rather than a rate: worst interval and missed
   60Hz deadlines per second, plus one line per gap over 20 ms. A single dropped
   frame is invisible in a per-second average.
