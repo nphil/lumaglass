@@ -18,7 +18,7 @@ Kept current with every change to this plan. Building starts on Nitin's go.
   ambient-light hardware chosen.
 - In design: Settings, windows and AI access mockups (`docs/mocks/`).
 - Waiting on Nitin: go to build; Lucent focus and depth; wallpaper motion
-  rate; disk cache; wall mount or stand; AI access transport; the open
+  rate; disk cache; wall mount or stand; the open
   decisions at the end.
 - TV tests when the set is free: receiver volume drift, histogram during
   Netflix, which input device network and CEC keys arrive on, pointer cost.
@@ -183,18 +183,24 @@ faster at sorting and text parsing, and 31 % faster at float loops (91 vs
   LumaShell's, and LG's own surfaces are stubbed as each LumaShell one passes
   the gate.
 - Research spike (after phase 3): LumaShow OS's Rust `ui` and renderer built
-  for armv7 as a Wayland client of LG's compositor, drawing LumaHome in one
+  for aarch64 on the 64-bit driver below (armv7 on LG's driver as the
+  fallback) as a Wayland client of LG's compositor, drawing LumaHome in one
   surface, measured with the frame probe against the QML version. If it
   holds the gate with headroom, surfaces move to it one at a time, LG's
   compositor keeps only window stacking, video holes and key routing, and
   LumaShell shares one UI toolkit with LumaShow.
-- 64-bit drawing path (with the spike): the spike's client built for aarch64
-  with a 64-bit Mali-G52 Bifrost driver from another Linux vendor package
-  (Rockchip ships aarch64 Wayland/GBM builds for its G52 parts), loaded with
-  its own glibc under `/var/lib/lumaglass` as LumaShow loads Amazon's driver,
-  handing buffers to LG's compositor through `linux-dmabuf`. It works only if
-  that driver's kernel interface version is accepted by LG's `mali_kbase`
-  (checked at open); first test is a triangle and a version log.
+- 64-bit drawing path: works offscreen on the set (2026-10-22). LG's
+  `mali_kbase` speaks kernel interface 11.40 and accepts 64-bit callers.
+  Rockchip's aarch64 Mali-G52 Bifrost builds (`libmali-bifrost-g52-g13p0` and
+  `-g24p0`, "dummy" window system), run with Debian bookworm arm64 glibc,
+  libstdc++ and libdrm through their own loader from a private directory,
+  report Mali-G52 / OpenGL ES 3.2 and draw a correct triangle. Measured
+  against LG's 32-bit r46p0 driver with the same probe: a full-HD shader
+  fill is equal (22.2 vs 21.9 ms, GPU-bound), while 2000 small draws per
+  frame cost 15.3-17.5 ms against 23.9-27.8 ms, about 36 % less CPU per
+  draw (driver version and bitness both differ). Next: the Wayland/GBM build
+  as a client of LG's compositor, sharing buffers through `linux-dmabuf`, to
+  put a 64-bit frame on screen.
 
 - NPU: LG's own (`DNE`, vendor LGE, driver 1.0, `/dev/npu0`, module
   `npu_drv`), 0.4 TOPS, managed by `com.webos.service.aiinferencemanager`
@@ -244,7 +250,8 @@ changed only with the remote. Principle 0 sets the shape: a confirmation an
 AI can reach is not a control, so nothing an AI can do is able to grant,
 widen or approve its own access.
 
-- Off by default. Settings › AI access turns the listener on (LAN only, bound
+- Assistants connect straight to the TV (Nitin, 2026-10-22). Off by default.
+  Settings › AI access turns the listener on (LAN only, bound
   to the LAN address, private source addresses only). Turning it on opens a
   network entrance, so it is done by Nitin with the remote, never through
   MCP, a script or chat.
@@ -590,9 +597,6 @@ what it already does.
 ## Open decisions
 
 - Live TV usage, which sets how far the channel banner and guide go.
-- AI access transport: the TV's own LAN listener (recommended, on only while
-  switched on with the remote) or a connection out to HomeLabber, whose
-  Face ID gate would then carry the approvals.
 - Background preloads (YouTube, Netflix: about 200 MB) and whether phase 8 is
   in scope.
 - Curated settings list and layout.
