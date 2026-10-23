@@ -167,7 +167,7 @@ Before building, with the set free:
    Bridge on ports 80 and 443.
 3. Strip, on order: BTF-Lighting FCOB WS2814 RGBW 4000K, 24 V, 5 m (14
    addressable sections per metre, 71 mm each), BTF 10 mm 3-pin FCOB connector
-   kit for the corners, Gledopto Elite GL-C-618WL (ESP32, WLED, Ethernet,
+   kit for the corners, Gledopto Elite GL-C-619WL (ESP32, WLED, Ethernet,
    level shifter, relay) and a 24 V 100 W supply. About 58 sections around
    the 65-inch frame; bottom edge depends on wall mount or stand.
 
@@ -214,6 +214,92 @@ Taken:
 - Back on the dock row jumps to its first tile.
 - Wallpaper slideshow from a USB drive or `/media/developer`, with interval
   and shuffle; pictures over 8 MB or 25 megapixels are skipped with a reason.
+
+## Reference: other webOS projects
+
+Survey of the GitHub and r/webos homebrew projects from 2025-26. Phase in
+brackets.
+
+Rendering and measurement (plx-native, liquid-glass launcher):
+
+- Blur cost follows the merged blurred area, not the number of panels: on
+  plx-native's webOS 4.5 set 60 fps held under about 300k blurred pixels and
+  fell to 24 fps full screen, and two panels far apart cost more than two side
+  by side. Glass stays grouped; the budget is re-measured on the C4 [1].
+- Each presented frame carries a fixed compositor charge (23-26 % of
+  compositor time there, more than the whole app). Anything with a clock or
+  animation, including the screensaver and ambient overlays, presents only
+  when something changes [1].
+- The GPU profiler read 45 fps on a 60 fps run; frame-rate claims come from
+  unprofiled runs that count presented frames [1].
+- Focus: the highlight moves at once; lift and scale animate only after focus
+  rests 150 ms, and further moves cancel the pending animation. Animating
+  glass per key press took that launcher from 16.8 ms to 127 ms mean frame
+  time [1].
+
+Input (rawin-launcher, HomeBack):
+
+- OK acts on release, not press: acting on press lets the release reach the
+  app underneath, which can launch a second app. Hold OK (700 ms) is the
+  secondary action [1].
+- The key filter fails open: a key is swallowed only while LumaHome is
+  answering, so a hung LumaHome never traps the remote. Holding Home (650 ms)
+  opens LG's Home as a manual escape, beside the heartbeat fallback [1].
+- Magic Remote pointer off is `settingsservice` `general.remotePointer` ("on"
+  on this set); no input injection needed.
+
+Home and inputs:
+
+- Live HDMI preview on the Inputs row (webos-nxe): a muted
+  `service/webos-external` video only after focus rests on a connected port,
+  torn down on the next move, so no video pipeline is built while scrolling.
+  `getAllInputStatus` reports presence as `activate` on webOS 10 [3].
+- Favourites: defaults written once, so an update never reorders the saved
+  list (rawin). Per-app rename, recolour and custom icon (webos-23-custom-home)
+  [3].
+- Dynamic tint from the wallpaper: sample at 32x18, bin each channel into 8
+  levels, skip near-black, take the most common bin; a newer wallpaper cancels
+  a running sample (liquid-glass launcher) [1].
+- Hero row of trending titles filtered to installed apps, OK opening the app
+  (lglow; needs a TMDB key) [7, optional].
+- Trial deploys (webos-home): file hashes checked before each bind mount, and
+  a new Home build rolls back after 120 s unless confirmed. Used when the Home
+  stub is productionised [1].
+
+Screensaver [8]:
+
+- LG's screensaver is not a foreground app; `tvpower/power/getPowerState`
+  reports `"Screen Saver"` and `turnOnScreen` ends it (lumen-webos).
+- `com.webos.app.screensaver` on this set is a Flutter bundle, so the QML
+  bind-mount of webosbrew/custom-screensaver does not apply; the replacement
+  is drawn in the compositor on that state.
+- Burn-in rules (tv-tools, zzeppieri): mostly black, moving elements, scenes
+  45-75 s with 4 s black fades, dim to 60 % over an hour, a clock that drifts
+  to a new spot every 60 s; standby after a set number of hours.
+- Art mode: public-domain paintings with mattes and frames (Lumen Gallery).
+
+Receiver OSD [4]: receiver values older than 6 s without a successful read are
+hidden rather than shown stale (webos-av-overlay).
+
+Platform findings:
+
+- `libvtcapture` has one owner: a second `vtCapture_init` fails with code 11
+  (scaler busy), so the ambient histogram and any frame capture cannot run
+  together (lg-hue-sync). That project's bridge client accepts only Hue's own
+  certificates, so it would not talk to Bifrost.
+- LG Home can be restored from a CRIU snapshot that ignores changed files; a
+  stale one is dropped by touching `invalid_img` in its checkpoint directory.
+  On this set `/mnt/lg/cmn_data/checkpoint` holds only `inputcommon`.
+- HbbTV is already off (`option.hbbTV`).
+- LG hard-codes public DNS servers and DNS-over-TLS, so a hosts-file blocker
+  is incomplete without redirecting DNS; that redirect is a network change and
+  Nitin's step. If blocking stops LG's time sync, the clock is set from the
+  HTTP `Date` of two agreeing sites.
+
+Not taken: locking the SSAP port 3001 to localhost (Home Assistant controls
+the set through it), neutralising the remote microphone (voice uses it),
+lginputhook's admin server (LAN port with path traversal), LAN listeners or
+self-updaters, and AI control servers such as webos-mcp.
 
 ## Phases
 
