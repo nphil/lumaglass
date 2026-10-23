@@ -211,13 +211,28 @@ faster at sorting and text parsing, and 31 % faster at float loops (91 vs
     (`wl_shell` plus `wl_webos_shell`, window type
     `_WEBOS_WINDOW_TYPE_OVERLAY`) and hands frames over through
     `zwp_linux_dmabuf_v1`. It allocates from `/dev/dma_heap/*`, which kernel
-    5.4 lacks (`/dev/ion` exists with no heaps), so a preloaded shim turns
-    those opens and `DMA_HEAP_IOCTL_ALLOC` into DRM dumb buffers on `card0`
-    exported as dma-bufs. Full-screen window over Home for 8 s, three runs:
-    60.2-60.8 fps with 2-10 frames over 20 ms, against 55.5-55.8 fps with
-    42-46 for the same program on LG's 32-bit driver, whose buffers go
-    through LG's own `mali_buffer_sharing`. Driver version, bitness and
-    buffer path all differ between the two.
+    5.4 lacks (`/dev/ion` exists with no heaps), so a preloaded shim answers
+    those opens and `DMA_HEAP_IOCTL_ALLOC`. Full-screen window over Home,
+    8 s per run, by buffer source:
+
+    | Buffers | fps | Over 20 ms |
+    |---|---|---|
+    | 64-bit, DRM dumb on `card0` (contiguous CMA) | 60.2-60.8 | 2-10 |
+    | 64-bit, Arm `/dev/dma_buf_te` (ordinary pages) | 55.9-56.6 | 35-41 |
+    | LG's 32-bit driver, its own `mali_buffer_sharing` | 55.5-55.8 | 42-46 |
+
+    The on-screen gain comes from contiguous buffers, not from 64-bit.
+    Contiguous memory is scarce: 41-65 MB of CMA free (692 MB total, mostly
+    held for video), and in standby a second 8.3 MB 1080p dumb buffer
+    already failed. `dma_buf_te` (the exporter LG's compositor holds open)
+    allocated twelve 1080p buffers from ordinary RAM without trouble.
+  - Production shape: no interposer. The renderer uses the windowless
+    `-gbm` build and its own swapchain: three buffers allocated once and
+    kept (contiguous when CMA allows at start, `dma_buf_te` otherwise),
+    imported with `EGL_EXT_image_dma_buf_import`, attached through
+    `zwp_linux_dmabuf_v1`, paced by `wl_surface.frame`. Before relying on
+    contiguous buffers, check that holding about 25 MB of CMA never starves
+    4K HDR decoding in Netflix and PlxNative.
   - Probe sources kept in `docs/research/m64/`.
 
 - NPU: LG's own (`DNE`, vendor LGE, driver 1.0, `/dev/npu0`, module
