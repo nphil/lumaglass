@@ -16,7 +16,8 @@ Kept current with every change to this plan. Building starts on Nitin's go.
 - Done: resident Quick Settings, resident LumaHome (idle while hidden), key
   filter written only on change, Home stub tested on the set and reverted,
   ambient-light hardware chosen.
-- In design: Settings, windows and AI access mockups (`docs/mocks/`).
+- Mockups ready for Nitin's review: Settings, windows, AI access
+  (`docs/mocks/`). 64-bit drawing proven on screen (Rendering stack).
 - Waiting on Nitin: go to build; Lucent focus and depth; wallpaper motion
   rate; disk cache; wall mount or stand; the open
   decisions at the end.
@@ -151,6 +152,13 @@ so the same build installs on each.
   reproduced: plugins run under their own user with mount, pid and memory
   limits, and only reviewed plugins are installed on the TV until network
   access per plugin is enforced another way.
+
+Apps are the other kind of extension: full 64-bit programs with their own
+window, drawn with LumaShow's toolkit on the 64-bit driver (Rendering stack),
+listed and launched like any app. Plugins extend the shell; apps are places
+of their own. An app runs as a card window registered with the app manager,
+so Home, Back and the app switcher treat it like LG's; only the overlay
+window type is proven so far.
 
 ## Rendering stack
 
