@@ -162,8 +162,18 @@ luna API (`com.webos.surfacemanager`: foreground app, recents, close by app,
 input picker, quick settings, spinner, PIN overlay, multi-view, screen
 visible, compositor capture and more), and every app, Netflix included,
 reaches the screen through its Wayland extensions; protected video stays on
-the hardware planes it places. The GPU driver (`libmali`, 52 MB) is 32-bit,
-so anything that draws with the GPU on the set is an armv7 build.
+the hardware planes it places.
+
+Hardware: four Cortex-A76 cores at 1.4 GHz, 2 GB RAM, a Mali-G52 with 3
+cores, and a 64-bit kernel. Userspace is 32-bit throughout: LG ships only a
+32-bit GPU driver (`libmali`, Bifrost DDK r46p0, 52 MB) for the 64-bit
+`mali_kbase` module. The cost is CPU only, and smaller than it looks: with
+2 GB of RAM the 4 GB address limit never binds, and the GPU, which carries
+the blur and composition, runs the same shaders at the same speed for 32-bit
+and 64-bit callers. Measured on the set with one Rust benchmark built both
+ways (best of 3 runs): 64-bit is level at byte hashing (736 vs 686 ms), 8-10 %
+faster at sorting and text parsing, and 31 % faster at float loops (91 vs
+119 ms). The helper and plugins are 64-bit already.
 
 - Replacing the compositor means reimplementing that luna API and LG's
   Wayland extensions to the behaviour SAM, the media pipeline and each app
@@ -178,6 +188,13 @@ so anything that draws with the GPU on the set is an armv7 build.
   holds the gate with headroom, surfaces move to it one at a time, LG's
   compositor keeps only window stacking, video holes and key routing, and
   LumaShell shares one UI toolkit with LumaShow.
+- 64-bit drawing path (with the spike): the spike's client built for aarch64
+  with a 64-bit Mali-G52 Bifrost driver from another Linux vendor package
+  (Rockchip ships aarch64 Wayland/GBM builds for its G52 parts), loaded with
+  its own glibc under `/var/lib/lumaglass` as LumaShow loads Amazon's driver,
+  handing buffers to LG's compositor through `linux-dmabuf`. It works only if
+  that driver's kernel interface version is accepted by LG's `mali_kbase`
+  (checked at open); first test is a triangle and a version log.
 
 ## Settings
 
