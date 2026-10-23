@@ -195,17 +195,24 @@ FocusScope {
 
     // LumaGlass Home: a compositor-drawn layer that owns Home's chrome (wallpaper, glass,
     // status bar, widgets, dock) while the stock Flutter app underneath stays resident as an
-    // invisible placeholder. Active only while Home is the surface this container holds; the
-    // file lives two levels up from this view (WebOSCompositor/lumaglass/LumaHome.qml).
-    // Remote keys reach it through the configd-registered key filter (payload/keyfilter/
-    // lumaglass.js), never through QtQuick focus: the compositor's KeyFilter sends keys
-    // straight to the focused Wayland window.
+    // invisible placeholder. The file lives two levels up from this view
+    // (WebOSCompositor/lumaglass/LumaHome.qml). Remote keys reach it through the
+    // configd-registered key filter (payload/keyfilter/lumaglass.js), never through QtQuick
+    // focus: the compositor's KeyFilter sends keys straight to the focused Wayland window.
+    //
+    // Built the first time Home is this container's surface and kept from then on, shown only
+    // while Home is in front. Rebuilding it on every return to Home froze the panel for one
+    // frame of 187-320 ms and then 3-6 more of 43-116 ms while widgets reloaded. While hidden
+    // it is idle: hostActive is false and its timers and fetches stop.
+    property bool lumaHomeCurrent: !!root.__surfaceItem && root.__surfaceItem.appId === "com.webos.app.home"
+    property bool lumaHomeBuilt: false
+    onLumaHomeCurrentChanged: if (lumaHomeCurrent) lumaHomeBuilt = true
     Loader {
         id: lumaHome
         anchors.fill: parent
         z: 2
-        active: root.__surfaceItem && root.__surfaceItem.appId === "com.webos.app.home"
-        visible: active && status === Loader.Ready
+        active: root.lumaHomeCurrent || root.lumaHomeBuilt
+        visible: root.lumaHomeCurrent && status === Loader.Ready
         source: "../../lumaglass/LumaHome.qml"
         onStatusChanged: {
             if (status === Loader.Error)
@@ -215,7 +222,7 @@ FocusScope {
     Binding {
         target: lumaHome.item
         property: "hostActive"
-        value: lumaHome.active && root.visibleState && lumaHome.status === Loader.Ready
+        value: root.lumaHomeCurrent && root.visibleState && lumaHome.status === Loader.Ready
         when: lumaHome.status === Loader.Ready
     }
     // The stock Home surface is fully covered while LumaHome draws; at opacity 0 the scene

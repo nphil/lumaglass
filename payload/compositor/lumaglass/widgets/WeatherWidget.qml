@@ -13,6 +13,8 @@ Item {
     property var settings: ({})
     property bool focused: false
     property bool inner: false
+    property bool live: true
+    property double fetchedAt: 0
     readonly property string iconDir: "file:///var/lib/lumaglass/qml/WebOSCompositor/lumaglass/icons/"
 
     function activate() {}
@@ -80,7 +82,10 @@ Item {
         }
         z.open("GET", "https://api.zippopotam.us/us/" + zip); z.send()
     }
-    Timer { interval: 900000; running: true; repeat: true; triggeredOnStart: true; onTriggered: root.fetchWeather() }
+    // Fetches only while Home is on screen. Showing it again fetches at once if the reading is
+    // older than the interval, so a TV left on an app does not poll unseen for hours.
+    Timer { interval: 900000; running: root.live; repeat: true; triggeredOnStart: true
+            onTriggered: if (Date.now() - root.fetchedAt >= interval - 5000) { root.fetchedAt = Date.now(); root.fetchWeather() } }
 
     Text {
         x: 0; y: 0

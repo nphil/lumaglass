@@ -25,6 +25,8 @@ Item {
     property bool motionReduced: false
     property real gridX: 0
     property real gridY: 0
+    // False while another app is in front: content stops its timers and fetches.
+    property bool live: true
 
     readonly property real cardLift: (theme.focus && theme.focus.cardLift) || 4
     readonly property real cardScale: (theme.focus && theme.focus.cardScale) || 1.03
@@ -100,7 +102,7 @@ Item {
 
     function contentProps(settings) {
         return { theme: card.theme, mat: card.mat, isLight: card.isLight, entry: card.layoutEntry, settings: settings || {},
-                 width: contentArea.width, height: contentArea.height, focused: card.focused, inner: card.inner }
+                 width: contentArea.width, height: contentArea.height, focused: card.focused, inner: card.inner, live: card.live }
     }
     function instantiate(url, settings) {
         var comp = Qt.createComponent(url)
@@ -181,6 +183,7 @@ Item {
 
     onFocusedChanged: if (content && "focused" in content) content.focused = card.focused
     onInnerChanged: if (content && "inner" in content) content.inner = card.inner
+    onLiveChanged: if (content && "live" in content) content.live = card.live
     onThemeChanged: if (content && "theme" in content) content.theme = card.theme
     onMatChanged: if (content) { if ("mat" in content) content.mat = card.mat; if ("isLight" in content) content.isLight = card.isLight }
     onWidthChanged: if (content) content.width = contentArea.width

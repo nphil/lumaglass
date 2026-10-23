@@ -193,6 +193,28 @@ ideas are taken, not its architecture.
 - Icons: Lucide (ISC licence) as the UI icon source, rendered once to the
   sizes in use, replacing the hand-drawn PNG set.
 
+## Reference: rudra-avatar/Hearth
+
+Hearth (MIT) is a web launcher that a watcher brings forward over LG's Home.
+Taken:
+
+- Boot logo: LG's hidden "Show LG logo when turning on" is
+  `settingsservice` `other.lgLogoDisplay` ("on" on this set). Part of the
+  clean cold start with the Home stub; offered as a setting, put back on
+  `lumaglass off`.
+- Saved first, fetched later: the last weather reading and news items are
+  written to `/var/lib/lumaglass/cache` and drawn at once on a cold start,
+  then refreshed; a reading older than 6 hours is not shown, and failed
+  fetches retry after 2, 10 and 30 minutes.
+- App library: hold OK for Move to start/left/right/end, Hide and
+  Uninstall. Uninstall is offered only with positive evidence the app is
+  user-installed (under `/media/developer/apps` or `/media/cryptofs/apps`,
+  not a `com.webos.`/`com.palm.`/`com.lge.` id, never LumaShell, Home or the
+  Homebrew Channel).
+- Back on the dock row jumps to its first tile.
+- Wallpaper slideshow from a USB drive or `/media/developer`, with interval
+  and shuffle; pictures over 8 MB or 25 megapixels are skipped with a reason.
+
 ## Phases
 
 1. Foundation: component kit, tokens, Manrope everywhere including the web

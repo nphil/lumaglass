@@ -51,6 +51,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- LumaHome is built once and kept. It was destroyed whenever an app came to
+  the front and rebuilt on every return to Home, which froze the panel for one
+  frame of 187-320 ms and then 3-6 more of 43-116 ms; a return now shows at
+  most two frames of 57-87 ms. The kept copy holds about 52 MB of compositor
+  memory while an app is in front.
+- While Home is hidden its clock, theme check, news and weather stop; showing
+  it again ticks at once and refreshes feeds older than their interval.
+- `apply` relaunches Home when the restart leaves only a background (preload)
+  instance of it, which had left the panel black after a wake.
 - The key filter is written to configd only when the chain would change.
   Each write makes the compositor reload every filter and rerun LG's init(),
   which in Game mode opens the Game Dashboard.

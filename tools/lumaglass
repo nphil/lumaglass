@@ -269,6 +269,11 @@ home_running() {
   return 1
 }
 
+home_in_front() {
+  luna-send -n 1 luna://com.webos.applicationManager/getForegroundAppInfo '{}' 2>/dev/null \
+    | grep -q '"appId":"com.webos.app.home"'
+}
+
 panel_presenting() {
   # Whether anything is actually on the panel, asked of the panel itself.
   b=$(luna-send -n 1 "$CAPTURE_URI" \
@@ -319,9 +324,11 @@ relaunch_home() {
       log_line "home on panel after $i relaunch attempt(s)"
       return 0
     fi
-    if home_running; then
+    if home_running && { [ "${LUMAGLASS_BOOT:-0}" = "1" ] || home_in_front; }; then
       # Running but nothing on the panel: the set is booting into standby, or
-      # the panel is off. Nothing more to wait for.
+      # the panel is off. Nothing more to wait for. Outside boot a Home that
+      # is not in front is a preload, as seen on a restart straight after a
+      # wake: the panel stays black until Home is launched again.
       log_line "home up after $i relaunch attempt(s), panel not presenting"
       return 0
     fi

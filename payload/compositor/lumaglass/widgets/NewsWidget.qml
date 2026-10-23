@@ -46,6 +46,8 @@ Item {
     property int perFeed: 4
     property int slideMs: (theme.news && theme.news.slideMs) || 10000
     property int refreshMs: (theme.news && theme.news.refreshMs) || 900000
+    property bool live: true
+    property double fetchedAt: 0
 
     property var items: []
     property int index: 0
@@ -138,8 +140,11 @@ Item {
     function fetchNews() { load(feeds, function() { root.load(feedsAlt, null) }) }
     function advance() { if (items.length > 1) index = (index + 1) % items.length }
 
-    Timer { interval: refreshMs; running: true; repeat: true; triggeredOnStart: true; onTriggered: root.fetchNews() }
-    Timer { interval: slideMs; running: root.items.length > 1 && !root.inner && !holdTimer.running; repeat: true; onTriggered: root.advance() }
+    // Both stop while Home is hidden: no feed polling or hero decodes behind an app. Showing Home
+    // again refreshes at once if the feeds are older than refreshMs.
+    Timer { interval: refreshMs; running: root.live; repeat: true; triggeredOnStart: true
+            onTriggered: if (Date.now() - root.fetchedAt >= interval - 5000) { root.fetchedAt = Date.now(); root.fetchNews() } }
+    Timer { interval: slideMs; running: root.live && root.items.length > 1 && !root.inner && !holdTimer.running; repeat: true; onTriggered: root.advance() }
 
     // What is on screen. A story change is a cross-fade: the next hero image decodes into
     // the idle slot first (no placeholder flash), then the hero shader mixes A->B over

@@ -201,8 +201,9 @@ Item {
         catch (e) { console.warn("[LumaHome] theme.json write failed: " + e) }
     }
     Timer {
-        // live theme preview for the companion app: content compare every 2 s, no restart
-        interval: 2000; running: true; repeat: true
+        // live theme preview for the companion app: content compare every 2 s, no restart.
+        // Only while Home is on screen; showing Home again catches up at once.
+        interval: 2000; running: root.hostActive; repeat: true; triggeredOnStart: true
         onTriggered: {
             loadJson(root.themeDirUrl + "theme.json", function(json, text) {
                 if ((text || "") === root.lastThemeText) return
@@ -693,6 +694,7 @@ Item {
                 cardMs: root.cardMs
                 cardEasing: root.cardEasing
                 motionReduced: root.motionReduced
+                live: root.hostActive
                 onHoverFocus: { if (root.focusLayer === "widget" && root.widgetFocusId !== modelData.id) { var o = widgetRepeater.itemAt(root.widgetIndexById(root.widgetFocusId)); if (o) o.inner = false } root.widgetFocusId = modelData.id; if (root.focusLayer !== "widget" || root.widgetFocusId !== modelData.id) root.focusLayer = "widgets" }
             }
         }

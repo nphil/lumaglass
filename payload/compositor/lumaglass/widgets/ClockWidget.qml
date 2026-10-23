@@ -16,6 +16,7 @@ Item {
     property var settings: ({})
     property bool focused: false
     property bool inner: false
+    property bool live: true
 
     function activate() {}
 
@@ -251,5 +252,6 @@ Item {
         }
     }
     onAnalogChanged: { calMonthKey = -1; tick() }
-    Timer { interval: 1000; running: true; repeat: true; triggeredOnStart: true; onTriggered: root.tick() }
+    // Stopped while Home is hidden; starting again ticks at once, so the hands never show a stale time.
+    Timer { interval: 1000; running: root.live; repeat: true; triggeredOnStart: true; onTriggered: root.tick() }
 }
