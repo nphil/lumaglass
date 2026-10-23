@@ -117,11 +117,40 @@ Before building:
 
 ## Native helper
 
-A static aarch64 helper (Go, as in LumaShow) runs beside the compositor. It
-holds the receiver connection and later the settings data layer. The
-compositor's userspace is 32-bit and stays that way; the helper does not
+A static aarch64 helper in Rust runs beside the compositor, in the language
+of LumaShow OS so the two share crates rather than reimplement them
+(`plugin-api`, `lumashow-sdk`, `settings-schema`, `service-api`, `ha-link`,
+`fetch`, `mdns`). A static `aarch64-unknown-linux-musl` build, linked with
+`rust-lld`, runs on the set as is (hello world 588 KB). It holds the receiver
+connection, the MCP server, the plugin broker and the settings data layer.
+The compositor's userspace is 32-bit and stays that way; the helper does not
 change rendering cost. News and weather parsing does not justify it on its
 own: measured at 0-1 ms per feed on the compositor thread.
+
+## Plugins
+
+LumaShell hosts LumaShow's plugins, so one plugin package runs on every Luma
+device. LumaShow's plugin API (`lumashow/docs/plugin-api.md`, level 1)
+already fits: a plugin never draws. It declares settings pages, cards, quick
+tiles, notifications and timeline items as records, and each device's shell
+draws them in its own sizes and for its own input, so the TV draws a card
+with remote focus at TV scale and the Show draws it for touch. Plugins are
+static aarch64 binaries, and the Show, the Lenovo and the TV are all aarch64,
+so the same build installs on each.
+
+- The broker in the helper speaks the same protocol; records become QML
+  surfaces in LumaShell: cards on Home, tiles in the quick panel, pages in
+  Settings, notifications as LumaShell toasts.
+- Device facts in `welcome` (screen class, input methods: touch, remote,
+  pointer, controller) are an additive field, for plugins with their own
+  views that must adapt; record-only plugins need nothing per device.
+- Home's own widgets (weather, news, at home) become first-party plugins once
+  the host exists.
+- The set's kernel has no user or network namespaces and no seccomp (only
+  mount, pid and cgroup isolation), so the Show's sandbox cannot be
+  reproduced: plugins run under their own user with mount, pid and memory
+  limits, and only reviewed plugins are installed on the TV until network
+  access per plugin is enforced another way.
 
 ## Settings
 
@@ -412,6 +441,8 @@ above replaces it).
    Centre to the own drawer.
 8. Trim background preloads, replace the
    screensaver. Research first, under the app-manager constraint below.
+9. Plugins: the broker on LumaShow's plugin API, TV drawing of cards, tiles,
+   settings pages and notifications, and Home's widgets moved to plugins.
 
 ## Glasshouse
 
