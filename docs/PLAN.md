@@ -152,6 +152,33 @@ so the same build installs on each.
   limits, and only reviewed plugins are installed on the TV until network
   access per plugin is enforced another way.
 
+## Rendering stack
+
+LG's compositor (`surface-manager`) is Qt 5.12 eglfs on DRM/KMS (`card0`,
+`lg1k`) with LG's Wayland server extensions (`libwayland-webos-server`,
+`libWebOSCoreCompositor`) and `libvt` for video planes. Besides drawing, it
+is the hub the rest of webOS talks to: SAM, WAM and other services call its
+luna API (`com.webos.surfacemanager`: foreground app, recents, close by app,
+input picker, quick settings, spinner, PIN overlay, multi-view, screen
+visible, compositor capture and more), and every app, Netflix included,
+reaches the screen through its Wayland extensions; protected video stays on
+the hardware planes it places. The GPU driver (`libmali`, 52 MB) is 32-bit,
+so anything that draws with the GPU on the set is an armv7 build.
+
+- Replacing the compositor means reimplementing that luna API and LG's
+  Wayland extensions to the behaviour SAM, the media pipeline and each app
+  expect, then re-checking them on every firmware update. Not planned: the
+  visible gain over drawing inside it is small and a gap breaks apps or video.
+- What is replaced instead is everything it draws: LG's QML is shadowed by
+  LumaShell's, and LG's own surfaces are stubbed as each LumaShell one passes
+  the gate.
+- Research spike (after phase 3): LumaShow OS's Rust `ui` and renderer built
+  for armv7 as a Wayland client of LG's compositor, drawing LumaHome in one
+  surface, measured with the frame probe against the QML version. If it
+  holds the gate with headroom, surfaces move to it one at a time, LG's
+  compositor keeps only window stacking, video holes and key routing, and
+  LumaShell shares one UI toolkit with LumaShow.
+
 ## Settings
 
 LG's Settings (`com.palm.app.settings`, an Enact web app, 25 MB on disk,
