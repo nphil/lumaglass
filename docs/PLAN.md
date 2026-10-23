@@ -18,9 +18,8 @@ Kept current with every change to this plan. Building starts on Nitin's go.
   ambient-light hardware chosen.
 - Mockups ready for Nitin's review: Settings, windows, AI access
   (`docs/mocks/`). 64-bit drawing proven on screen (Rendering stack).
-- Waiting on Nitin: go to build; Lucent focus and depth; wallpaper motion
-  rate; disk cache; wall mount or stand; the open
-  decisions at the end.
+- Waiting on Nitin: go to build; mockup feedback. Design and setup choices
+  are recorded under Decided.
 - TV tests when the set is free: receiver volume drift, histogram during
   Netflix, which input device network and CEC keys arrive on, pointer cost.
 - Next build step: phase 1.
@@ -627,14 +626,25 @@ what it already does.
 - PIN prompt, modal alerts, input switching and power controls get scripted
   tests before cutover. Picture Mode stays FILMMAKER MODE throughout.
 
+## Decided
+
+- Focus cue: the bright lower edge stays (Nitin, 2026-10-23).
+- Dark-mode depth: a step stronger than today's Home, so panes lift further
+  off the wallpaper (Nitin, 2026-10-23).
+- Home wallpaper motion: about 10 updates a second, so idle Home stops
+  redrawing at an uneven 36 fps (Nitin, 2026-10-23).
+- QML disk cache on, cleared on every stage change (Nitin, 2026-10-23).
+- The set is wall-mounted: the strip runs all four edges, the 5 m strip on
+  order (Nitin, 2026-10-23).
+- Live TV is rarely used: phase 6 restyles the channel banner only; no
+  guide (Nitin, 2026-10-23).
+- Background preloads: only Netflix stays warm; YouTube (135 MB), LG
+  Channels (100 MB) and the web browser (72 MB) are dropped from
+  `preloadmanager.supportAppList`, about 307 MB, re-sent at every wake as
+  webOS 10 requires (Nitin, 2026-10-23). Phase 8.
+
 ## Open decisions
 
-- Live TV usage, which sets how far the channel banner and guide go.
-- Background preloads (YouTube, Netflix: about 200 MB) and whether phase 8 is
-  in scope.
 - Curated settings list and layout.
-- Home wallpaper motion: idle Home redraws at about 36 fps because the motion
-  layer runs at 30 fps. Options: 60 fps, slower (about 10 fps), or unchanged.
-- Lucent v2 focus cue: bright lower edge or quieter; depth strength in dark.
 - Rename of internal names (repo, app id `org.nphil.lumaglass`,
   `/var/lib/lumaglass`) to LumaShell, done once during phase 1.
