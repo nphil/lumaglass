@@ -9,6 +9,21 @@ through a reversible hook and falls back to LG's own on failure.
 Design language: `skill://design-language` (Lucent v2, TV profile). Surface
 inventory snapshot of the firmware: `/data/home/lgtv/uiinv`.
 
+## Status
+
+Kept current with every change to this plan. Building starts on Nitin's go.
+
+- Done: resident Quick Settings, resident LumaHome (idle while hidden), key
+  filter written only on change, Home stub tested on the set and reverted,
+  ambient-light hardware chosen.
+- In design: Settings, windows and AI access mockups (`docs/mocks/`).
+- Waiting on Nitin: go to build; Lucent focus and depth; wallpaper motion
+  rate; disk cache; wall mount or stand; AI access transport; the open
+  decisions at the end.
+- TV tests when the set is free: receiver volume drift, histogram during
+  Netflix, which input device network and CEC keys arrive on, pointer cost.
+- Next build step: phase 1.
+
 ## Rules every surface meets
 
 - Built once and kept resident; an open shows the item and moves focus. A
@@ -55,7 +70,7 @@ inventory snapshot of the firmware: `/data/home/lgtv/uiinv`.
 | Live TV banner, info, no-signal | `inputcommon` QML | Restyled | Overlay mount |
 | On-screen keyboard | maliit QML | Restyled | Overlay mount |
 | Search and voice | `com.webos.app.voice` QML | Restyled or replaced | Overlay mount |
-| Settings | Web app, +93 MB while open | Curated screens in the quick panel; LG's app themed for the rest | System UI redirect + web theme |
+| Settings | Web app, +93 MB while open | Own Settings (below); LG's app themed only for its deep screens | Launch redirect + web theme |
 | Settings sub-apps | Enact web apps | One shared theme | Overlay mount |
 | Notification Centre | Web app | Own drawer | Launch redirect |
 | Context menu, on-screen remote | Compositor QML | Rebuilt | System UI redirect |
@@ -65,8 +80,13 @@ inventory snapshot of the firmware: `/data/home/lgtv/uiinv`.
 | Nudges, sports alarm, store promotions | Compositor QML | Off (empty view) | System UI redirect |
 | Ad and content-recognition overlays | Native | Off through LG settings | Settings |
 
-Not owned: third-party app UIs (Netflix, YouTube, PlxNative), the Magic Remote
-pointer (native; image swap unverified), video.
+Not owned: third-party app UIs (Netflix, YouTube, PlxNative), video, and the
+Magic Remote pointer image (native; swap unverified). The pointer stays
+supported: every surface has a hover state, and Settings › Remote & pointer
+turns it off through `settingsservice` `general.remotePointer` for a
+button-only remote. Turning it off removes accidental hover moves; any frame
+cost of the pointer itself is measured with the frame probe before claiming
+one.
 
 ## Receiver volume
 
@@ -102,6 +122,78 @@ holds the receiver connection and later the settings data layer. The
 compositor's userspace is 32-bit and stays that way; the helper does not
 change rendering cost. News and weather parsing does not justify it on its
 own: measured at 0-1 ms per feed on the compositor thread.
+
+## Settings
+
+LG's Settings (`com.palm.app.settings`, an Enact web app, 25 MB on disk,
++93 MB while open) is replaced by LumaShell's own Settings, drawn in the
+compositor and resident like Quick Settings. It writes the same places LG's
+app does (`settingsservice` categories such as `picture`, `sound`, `general`,
+`option`, and the audio, network and input services), so LG's processing,
+panel care and stored values are unchanged; only the screens are new.
+
+- Layout follows LumaShow's Settings ("Live list"): a rail of sections, each
+  with a glyph and a one-line summary of its current value, and a page with
+  tabs, rows, sliders and switches. Same component kit as LumaShow, Lucent
+  tokens, TV sizes.
+- Sections: Picture, Sound, Inputs & devices, Network, Ambient light, Home &
+  look, Remote & pointer, AI access, System. LG's roughly hundred items are
+  curated into these; rare deep screens (expert calibration, channel tuning,
+  legal, LG account, software update) stay LG's, themed, behind "More in LG
+  settings" rows that open them directly.
+- The Settings key, the gear on Home and Quick Settings' "All settings" all
+  open it (launch redirect); LG's app remains reachable from System.
+- Mockups: `docs/mocks/` (gallery `index.html`, mapping of LG's items to the
+  sections in `settings-map.md`).
+
+## AI access (MCP)
+
+The native helper serves an MCP server so AI assistants (Cody, Home
+Assistant's agents) can use the TV, with every permission held on the TV and
+changed only with the remote. Principle 0 sets the shape: a confirmation an
+AI can reach is not a control, so nothing an AI can do is able to grant,
+widen or approve its own access.
+
+- Off by default. Settings › AI access turns the listener on (LAN only, bound
+  to the LAN address, private source addresses only). Turning it on opens a
+  network entrance, so it is done by Nitin with the remote, never through
+  MCP, a script or chat.
+- Pairing: the TV shows a one-time code; the assistant presents it once and
+  receives its own token, stored hashed on the TV. Tokens are created and
+  removed only from the TV's screen. "Lock out all AI" revokes every token
+  and stops the listener.
+- Typed tools only: no raw luna, shell, key-injection or file tools, so an
+  assistant cannot drive LG's screens or LumaShell's own menus. Each tool has
+  a level set per assistant: Always, Ask on TV, or Never.
+
+| Group | Default |
+|---|---|
+| See what is playing, power and input state | Always |
+| Play, pause, volume, mute | Always |
+| Open apps, switch inputs | Ask on TV |
+| Change picture and sound settings | Ask on TV |
+| Turn the TV off | Ask on TV |
+| See the screen (capture) | Never |
+
+- Never exposed, at any level: AI access itself, pairing, network and
+  developer settings, uninstalling apps, resets, software updates, LumaShell
+  install or updates, the microphone.
+- "Ask on TV" opens a LumaShell prompt over whatever is playing: who asks,
+  the action in LumaShell's own words, the assistant's reason labelled as
+  its own, Allow once or Deny, expiring after 30 s. A denial pauses that
+  assistant's requests until it is resumed in Settings. Every call is logged
+  and shown in Settings › AI access.
+- The prompt and the AI access page answer only to keys from a physical
+  remote. All remotes reach the compositor as `lginput2` virtual devices (IR
+  `LGE RCU`, Magic Remote `LGE M-RCU`, `IoT keypad` and others), and Home
+  Assistant's `webostv.button` presses (SSAP, port 3001) arrive the same way.
+  Before building, measure which device SSAP and CEC keys appear on; if
+  network keys cannot be told apart from the remote, approvals go through
+  HomeLabber's Face ID gate instead of the on-screen prompt.
+- TV root bypasses all of this. While an AI holds root SSH on the set (the
+  development path today), the permissions bind only assistants that use the
+  MCP server; root access for development stays a separate decision of
+  Nitin's.
 
 ## Compositor startup
 
@@ -298,8 +390,9 @@ Platform findings:
 
 Not taken: locking the SSAP port 3001 to localhost (Home Assistant controls
 the set through it), neutralising the remote microphone (voice uses it),
-lginputhook's admin server (LAN port with path traversal), LAN listeners or
-self-updaters, and AI control servers such as webos-mcp.
+lginputhook's admin server (LAN port with path traversal), self-updaters, and
+webos-mcp (raw control with no on-TV permissions; LumaShell's own MCP server
+above replaces it).
 
 ## Phases
 
@@ -308,7 +401,7 @@ self-updaters, and AI control servers such as webos-mcp.
    state and fallback, the native helper, the disk cache, and LumaHome in
    LG's Home's place (Home stub, see Glasshouse).
 2. Notifications: toasts, alerts, PIN prompt, input popups.
-3. Quick panel and curated settings.
+3. Quick panel, Settings, and AI access (MCP server, permissions, prompt).
 4. Input picker, the receiver-fed volume and mute OSD, and ambient light.
 5. Launch splash, spinners, boot and power-off logos, context menu, on-screen
    remote.
@@ -405,7 +498,9 @@ what it already does.
 ## Open decisions
 
 - Live TV usage, which sets how far the channel banner and guide go.
-- Magic Remote pointer use, which adds hover states to every surface.
+- AI access transport: the TV's own LAN listener (recommended, on only while
+  switched on with the remote) or a connection out to HomeLabber, whose
+  Face ID gate would then carry the approvals.
 - Background preloads (YouTube, Netflix: about 200 MB) and whether phase 8 is
   in scope.
 - Curated settings list and layout.
