@@ -1,0 +1,105 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<title>LumaShell · Settings · AI access</title>
+<link rel="stylesheet" href="lucent.css">
+</head>
+<body>
+<div class="wall"></div>
+
+<div class="pane topbar">
+  <i data-ic="chevron-left" class="ic"></i>
+  <span class="title">Settings</span>
+  <span class="spacer"></span>
+  <span class="status"><i data-ic="wifi"></i><i data-ic="mouse-pointer-2"></i></span>
+  <span class="time num">9:51 PM</span>
+</div>
+
+<nav class="pane rail" data-open="ai" aria-label="Settings sections"></nav>
+
+<main class="pane page">
+  <div class="page-head">
+    <h1>AI access</h1>
+    <span class="sub">2 assistants paired · last request 2 min ago</span>
+  </div>
+  <div class="page-note" style="margin-top:14px">
+    <i data-ic="lock"></i>
+    <span>AI can never change these settings, pair new assistants, or answer its own requests. Only this remote can.</span>
+  </div>
+
+  <div class="page-body" style="margin-top:10px">
+    <div class="rows">
+      <div class="row focusable no-line" tabindex="0" data-autofocus>
+        <div class="lead"><i data-ic="bot"></i></div>
+        <div class="text"><div class="t">Allow AI assistants</div><div class="d">Reachable from the home network only. Off is the default.</div></div>
+        <div class="seg" role="radiogroup"><span class="focusable" role="radio" aria-selected="false">Off</span><span class="focusable" role="radio" aria-selected="true">LAN only</span></div>
+      </div>
+    </div>
+
+    <div class="cols">
+      <section>
+        <div class="group-label" style="padding-top:14px">Paired assistants</div>
+        <div class="assistant focusable" tabindex="0">
+          <div class="lead"><i data-ic="sparkles"></i></div>
+          <div class="text"><div class="t">Cody</div><div class="d">Volume down · 2 min ago</div></div>
+          <span class="btn small focusable">Remove</span>
+        </div>
+        <div class="assistant focusable" tabindex="0">
+          <div class="lead"><i data-ic="house-wifi"></i></div>
+          <div class="text"><div class="t">Home Assistant</div><div class="d">Paused Plex · yesterday</div></div>
+          <span class="btn small focusable">Remove</span>
+        </div>
+
+        <div class="group-label" style="padding-top:16px">Recent activity</div>
+        <div class="log">
+          <div class="e"><span class="when">9:49 PM</span><span class="what"><b>Cody</b> · volume 32 → 24</span><span class="res ok">Allowed</span></div>
+          <div class="e"><span class="when">9:46 PM</span><span class="what"><b>Cody</b> · turn the TV off</span><span class="res no">Denied</span></div>
+          <div class="e"><span class="when">9:40 PM</span><span class="what"><b>Cody</b> · what is playing</span><span class="res ok">Allowed</span></div>
+          <div class="e"><span class="when">Yesterday</span><span class="what"><b>Home Assistant</b> · pause Plex</span><span class="res ok">Allowed</span></div>
+        </div>
+
+        <div style="margin-top:auto; padding-top:12px">
+          <span class="btn danger strong wide focusable" tabindex="0"><i data-ic="shield-off"></i>Lock out all AI</span>
+          <div class="page-note" style="font-size:22px; margin-top:10px; justify-content:center; text-align:center">Removes every assistant and turns access off.</div>
+        </div>
+      </section>
+
+      <section>
+        <div class="group-label" style="padding-top:14px; display:flex; align-items:center; gap:16px">
+          <span style="flex:1">What assistants may do</span>
+          <span class="seg" role="radiogroup" style="padding:3px"><span class="focusable" role="radio" aria-selected="true" style="height:44px;min-width:0;padding:0 16px;font-size:21px">Cody</span><span class="focusable" role="radio" aria-selected="false" style="height:44px;min-width:0;padding:0 16px;font-size:21px">Home Assistant</span></span>
+        </div>
+        <div class="perm focusable" tabindex="0">
+          <div class="text"><div class="t">See what’s playing</div><div class="d">Title, app, input, volume, on or off</div></div>
+          <div class="seg" role="radiogroup"><span role="radio" aria-selected="true">Always</span><span role="radio" aria-selected="false">Ask on TV</span><span role="radio" aria-selected="false">Never</span></div>
+        </div>
+        <div class="perm focusable" tabindex="0">
+          <div class="text"><div class="t">Play, pause, volume</div><div class="d">Including mute</div></div>
+          <div class="seg" role="radiogroup"><span role="radio" aria-selected="true">Always</span><span role="radio" aria-selected="false">Ask on TV</span><span role="radio" aria-selected="false">Never</span></div>
+        </div>
+        <div class="perm focusable" tabindex="0">
+          <div class="text"><div class="t">Open apps, switch inputs</div><div class="d">Only apps already installed</div></div>
+          <div class="seg" role="radiogroup"><span role="radio" aria-selected="false">Always</span><span role="radio" aria-selected="true">Ask on TV</span><span role="radio" aria-selected="false">Never</span></div>
+        </div>
+        <div class="perm focusable" tabindex="0">
+          <div class="text"><div class="t">Change picture &amp; sound</div><div class="d">Modes, brightness, sound out</div></div>
+          <div class="seg" role="radiogroup"><span role="radio" aria-selected="false">Always</span><span role="radio" aria-selected="true">Ask on TV</span><span role="radio" aria-selected="false">Never</span></div>
+        </div>
+        <div class="perm focusable" tabindex="0">
+          <div class="text"><div class="t">Turn the TV off</div><div class="d">Never turn it on</div></div>
+          <div class="seg" role="radiogroup"><span role="radio" aria-selected="false">Always</span><span role="radio" aria-selected="true">Ask on TV</span><span role="radio" aria-selected="false">Never</span></div>
+        </div>
+        <div class="perm focusable" tabindex="0">
+          <div class="text"><div class="t">See the screen</div><div class="d">A screenshot. Never by default.</div></div>
+          <div class="seg danger" role="radiogroup"><span role="radio" aria-selected="false">Always</span><span role="radio" aria-selected="false">Ask on TV</span><span role="radio" aria-selected="true">Never</span></div>
+        </div>
+      </section>
+    </div>
+  </div>
+</main>
+
+<script src="icons.js"></script>
+<script src="mock.js"></script>
+</body>
+</html>

@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<title>LumaShell · Inputs</title>
+<link rel="stylesheet" href="lucent.css">
+</head>
+<body>
+<div class="home-behind"></div>
+<div class="scrim"></div>
+
+<div class="overlay sheet" role="dialog" aria-labelledby="it">
+  <div class="head">
+    <h1 id="it">Inputs</h1>
+    <span class="sub">Names come from the devices themselves (HDMI-CEC)</span>
+    <span class="right"><i data-ic="volume-2" style="width:26px;height:26px"></i>Sound: Denon on HDMI 2</span>
+  </div>
+  <div class="inputs">
+    <div class="input-tile focusable" tabindex="0">
+      <div class="top"><span class="port">LIVE TV</span></div>
+      <i data-ic="antenna" class="big"></i>
+      <div class="name">Antenna</div>
+      <div class="state"><span class="dot"></span>14 channels</div>
+    </div>
+    <div class="input-tile focusable" tabindex="0" data-autofocus>
+      <div class="top"><span class="port">HDMI 1</span></div>
+      <i data-ic="tv-minimal-play" class="big"></i>
+      <div class="name">Apple TV 4K</div>
+      <div class="state"><span class="dot"></span>Connected · on</div>
+    </div>
+    <div class="input-tile focusable" tabindex="0">
+      <div class="top"><span class="port">HDMI 2 · eARC</span><span class="chip on" style="height:38px;font-size:21px;padding:0 12px">Sound out</span></div>
+      <i data-ic="speaker" class="big"></i>
+      <div class="name">Denon AVR-S760H</div>
+      <div class="state"><span class="dot"></span>Connected · receiver</div>
+    </div>
+    <div class="input-tile focusable" tabindex="0">
+      <div class="top"><span class="port">HDMI 3</span></div>
+      <i data-ic="gamepad-2" class="big"></i>
+      <div class="name">PlayStation 5</div>
+      <div class="state"><span class="dot"></span>Connected · standby</div>
+    </div>
+    <div class="input-tile focusable off" tabindex="0">
+      <div class="top"><span class="port">HDMI 4</span></div>
+      <i data-ic="unplug" class="big"></i>
+      <div class="name">Nothing connected</div>
+      <div class="state"><span class="dot"></span>Plug in a device to use it</div>
+    </div>
+  </div>
+</div>
+
+<script src="icons.js"></script>
+<script src="mock.js"></script>
+</body>
+</html>

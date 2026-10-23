@@ -189,18 +189,28 @@ faster at sorting and text parsing, and 31 % faster at float loops (91 vs
   holds the gate with headroom, surfaces move to it one at a time, LG's
   compositor keeps only window stacking, video holes and key routing, and
   LumaShell shares one UI toolkit with LumaShow.
-- 64-bit drawing path: works offscreen on the set (2026-10-22). LG's
-  `mali_kbase` speaks kernel interface 11.40 and accepts 64-bit callers.
-  Rockchip's aarch64 Mali-G52 Bifrost builds (`libmali-bifrost-g52-g13p0` and
-  `-g24p0`, "dummy" window system), run with Debian bookworm arm64 glibc,
-  libstdc++ and libdrm through their own loader from a private directory,
-  report Mali-G52 / OpenGL ES 3.2 and draw a correct triangle. Measured
-  against LG's 32-bit r46p0 driver with the same probe: a full-HD shader
-  fill is equal (22.2 vs 21.9 ms, GPU-bound), while 2000 small draws per
-  frame cost 15.3-17.5 ms against 23.9-27.8 ms, about 36 % less CPU per
-  draw (driver version and bitness both differ). Next: the Wayland/GBM build
-  as a client of LG's compositor, sharing buffers through `linux-dmabuf`, to
-  put a 64-bit frame on screen.
+- 64-bit drawing path: works on screen (2026-10-22). LG's `mali_kbase`
+  speaks kernel interface 11.40 and accepts 64-bit callers. Rockchip's
+  aarch64 Mali-G52 Bifrost builds (`libmali-bifrost-g52-g24p0`, g13p0 too),
+  run with Debian bookworm arm64 glibc, libstdc++, libdrm, libwayland-client
+  and libffi through their own loader from a private directory, report
+  Mali-G52 / OpenGL ES 3.2.
+  - Offscreen, against LG's 32-bit r46p0 driver with the same probe: a
+    full-HD shader fill is equal (22.2 vs 21.9 ms, GPU-bound); 2000 small
+    draws per frame cost 15.3-17.5 ms against 23.9-27.8 ms, about 36 % less
+    CPU per draw.
+  - On screen: the `-wayland-gbm` build is a client of LG's compositor
+    (`wl_shell` plus `wl_webos_shell`, window type
+    `_WEBOS_WINDOW_TYPE_OVERLAY`) and hands frames over through
+    `zwp_linux_dmabuf_v1`. It allocates from `/dev/dma_heap/*`, which kernel
+    5.4 lacks (`/dev/ion` exists with no heaps), so a preloaded shim turns
+    those opens and `DMA_HEAP_IOCTL_ALLOC` into DRM dumb buffers on `card0`
+    exported as dma-bufs. Full-screen window over Home for 8 s, three runs:
+    60.2-60.8 fps with 2-10 frames over 20 ms, against 55.5-55.8 fps with
+    42-46 for the same program on LG's 32-bit driver, whose buffers go
+    through LG's own `mali_buffer_sharing`. Driver version, bitness and
+    buffer path all differ between the two.
+  - Probe sources kept in `docs/research/m64/`.
 
 - NPU: LG's own (`DNE`, vendor LGE, driver 1.0, `/dev/npu0`, module
   `npu_drv`), 0.4 TOPS, managed by `com.webos.service.aiinferencemanager`

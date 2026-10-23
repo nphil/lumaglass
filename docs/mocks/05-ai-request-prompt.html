@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<title>LumaShell · AI request</title>
+<link rel="stylesheet" href="lucent.css">
+<style>
+  .frame { background-image: url("img/still.jpg"); }
+  .scrim { background: rgba(8, 7, 14, .58); }
+</style>
+</head>
+<body>
+<div class="frame"></div>
+<div class="scrim"></div>
+
+<div class="overlay dialog prompt" role="alertdialog" aria-labelledby="pt">
+  <div class="who"><span class="lead"><i data-ic="sparkles"></i></span><span>Cody is asking · through AI access</span></div>
+  <h1 id="pt">Cody wants to turn off the TV</h1>
+
+  <div class="act">
+    <i data-ic="power"></i>
+    <div><div class="k">What will happen</div><div class="a">The TV turns off now. The Denon stays as it is.</div></div>
+  </div>
+
+  <div class="reason">
+    <div class="k">Cody’s reason, in its own words</div>
+    <div class="q">“Nate asked me to shut everything down for the night.”</div>
+  </div>
+
+  <div class="actions">
+    <span class="btn focusable" tabindex="0">Allow once</span>
+    <span class="btn focusable" tabindex="0" data-autofocus>Deny</span>
+  </div>
+
+  <div class="count"><span class="num">Closes in 24 s</span><div class="bar"><i style="width:80%"></i></div><span>Answer with the remote</span></div>
+</div>
+
+<script src="icons.js"></script>
+<script src="mock.js"></script>
+</body>
+</html>

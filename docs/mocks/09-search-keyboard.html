@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<title>LumaShell · Search</title>
+<link rel="stylesheet" href="lucent.css">
+<style>
+  .search { left: var(--lu-edge-x); right: var(--lu-edge-x); bottom: var(--lu-edge-y); padding: 28px 40px 32px; display: flex; flex-direction: column; gap: 22px; }
+  .field { display: flex; align-items: center; gap: 18px; height: 84px; padding: 12px 26px; border-radius: 22px; background: var(--well); box-shadow: var(--well-inset); }
+  .field .ic { width: 32px; height: 32px; color: var(--lu-ink-2); }
+  .field .val { font-size: 32px; font-weight: 600; letter-spacing: -.005em; display: flex; align-items: center; }
+  .field .caret { display: inline-block; width: 3px; height: 38px; background: var(--lu-accent); margin-left: 3px; border-radius: 2px; }
+  .field .hint { margin-left: auto; font-size: 23px; color: var(--lu-ink-3); font-weight: 500; display: flex; align-items: center; gap: 10px; }
+  .field .hint .ic { width: 26px; height: 26px; }
+  .results { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; }
+  .result { position: relative; min-width: 0; display: flex; align-items: center; gap: 18px; height: 108px; padding: 12px 22px; border-radius: var(--lu-radius-tile); background: var(--tile-ink-wash); border: 1px solid transparent; }
+  .result .lead { width: 60px; height: 60px; border-radius: 16px; display: grid; place-items: center; flex: none; background: var(--tile-ink-wash); color: var(--lu-ink); }
+  .result .lead .ic { width: 32px; height: 32px; }
+  .result .t { font-size: 27px; font-weight: 600; line-height: 1.15; }
+  .result .d { font-size: 22px; font-weight: 500; color: var(--lu-ink-2); margin-top: 3px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .result .t mark { background: none; color: var(--lu-accent); }
+  .kb { margin-top: 8px; display: flex; flex-direction: column; gap: 10px; align-items: center; }
+  .krow { display: flex; gap: 10px; }
+  .key { position: relative; width: 84px; height: 72px; border-radius: var(--lu-radius-control); display: grid; place-items: center; font-size: 30px; font-weight: 500; background: var(--tile-ink-wash); border: 1px solid transparent; }
+  .key.wide { width: 178px; font-size: 24px; font-weight: 600; }
+  .key.space { width: 554px; }
+  .key .ic { width: 30px; height: 30px; }
+  .key.focusable.focus { transform: translateY(calc(-1 * var(--lu-lift))) scale(1.06); }
+  .key.focusable.focus::after { left: 16px; right: 16px; bottom: 5px; }
+</style>
+</head>
+<body>
+<div class="home-behind"></div>
+<div class="scrim"></div>
+
+<div class="overlay search" role="dialog" aria-label="Search">
+  <div class="field" role="textbox" aria-label="Search apps, inputs and settings">
+    <i data-ic="search"></i>
+    <span class="val">Net<span class="caret"></span></span>
+    <span class="hint"><i data-ic="mic"></i>Hold the mic key to speak</span>
+  </div>
+
+  <div class="results">
+    <div class="result focusable" tabindex="0"><span class="lead"><i data-ic="clapperboard"></i></span><div style="min-width:0"><div class="t"><mark>Net</mark>flix</div><div class="d">App · open</div></div></div>
+    <div class="result focusable" tabindex="0"><span class="lead"><i data-ic="wifi"></i></span><div style="min-width:0"><div class="t"><mark>Net</mark>work</div><div class="d">Settings · Nate’s Home</div></div></div>
+    <div class="result focusable" tabindex="0"><span class="lead"><i data-ic="globe"></i></span><div style="min-width:0"><div class="t">Web search “<mark>Net</mark>”</div><div class="d">Opens the browser</div></div></div>
+    <div class="result focusable" tabindex="0"><span class="lead"><i data-ic="bot"></i></span><div style="min-width:0"><div class="t"><mark>Net</mark>work for AI</div><div class="d">Settings · AI access</div></div></div>
+  </div>
+
+  <div class="kb" aria-label="Keyboard">
+    <div class="krow">
+      <span class="key focusable">1</span><span class="key focusable">2</span><span class="key focusable">3</span><span class="key focusable">4</span><span class="key focusable">5</span><span class="key focusable">6</span><span class="key focusable">7</span><span class="key focusable">8</span><span class="key focusable">9</span><span class="key focusable">0</span>
+    </div>
+    <div class="krow">
+      <span class="key focusable">q</span><span class="key focusable">w</span><span class="key focusable">e</span><span class="key focusable">r</span><span class="key focusable" data-autofocus>t</span><span class="key focusable">y</span><span class="key focusable">u</span><span class="key focusable">i</span><span class="key focusable">o</span><span class="key focusable">p</span>
+    </div>
+    <div class="krow">
+      <span class="key focusable">a</span><span class="key focusable">s</span><span class="key focusable">d</span><span class="key focusable">f</span><span class="key focusable">g</span><span class="key focusable">h</span><span class="key focusable">j</span><span class="key focusable">k</span><span class="key focusable">l</span><span class="key focusable">’</span>
+    </div>
+    <div class="krow">
+      <span class="key focusable"><i data-ic="arrow-big-up"></i></span><span class="key focusable">z</span><span class="key focusable">x</span><span class="key focusable">c</span><span class="key focusable">v</span><span class="key focusable">b</span><span class="key focusable">n</span><span class="key focusable">m</span><span class="key focusable">.</span><span class="key focusable"><i data-ic="delete"></i></span>
+    </div>
+    <div class="krow">
+      <span class="key wide focusable">?123</span><span class="key space focusable">space</span><span class="key wide focusable">Done</span>
+    </div>
+  </div>
+</div>
+
+<script src="icons.js"></script>
+<script src="mock.js"></script>
+</body>
+</html>

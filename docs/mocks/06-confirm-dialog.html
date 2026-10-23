@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<title>LumaShell · Confirm</title>
+<link rel="stylesheet" href="lucent.css">
+<style>
+  .app { width: 72px; height: 72px; border-radius: 18px; background: #F47521; display: grid; place-items: center; color: #fff; flex: none; box-shadow: var(--highlight-raised); }
+  .app .ic { width: 40px; height: 40px; }
+  .dialog .head { display: flex; align-items: center; gap: 22px; }
+</style>
+</head>
+<body>
+<div class="home-behind"></div>
+<div class="scrim"></div>
+
+<div class="overlay dialog" role="alertdialog" aria-labelledby="ct">
+  <div class="head">
+    <span class="app"><i data-ic="layout-grid"></i></span>
+    <h1 id="ct">Uninstall Crunchyroll?</h1>
+  </div>
+  <p>The app and its sign-in on this TV are removed. Downloads in the app are lost. It can be installed again from the LG Content Store.</p>
+  <div class="actions">
+    <span class="btn focusable" tabindex="0" data-autofocus>Keep it</span>
+    <span class="btn danger strong focusable" tabindex="0"><i data-ic="trash-2"></i>Uninstall</span>
+  </div>
+</div>
+
+<script src="icons.js"></script>
+<script src="mock.js"></script>
+</body>
+</html>
