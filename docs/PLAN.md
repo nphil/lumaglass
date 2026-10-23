@@ -196,6 +196,23 @@ faster at sorting and text parsing, and 31 % faster at float loops (91 vs
   that driver's kernel interface version is accepted by LG's `mali_kbase`
   (checked at open); first test is a triangle and a version log.
 
+- NPU: LG's own (`DNE`, vendor LGE, driver 1.0, `/dev/npu0`, module
+  `npu_drv`), 0.4 TOPS, managed by `com.webos.service.aiinferencemanager`
+  (`open`, `requestResource`, `installModel`, `getDeviceCapability`). Its only
+  registered user is the picture controller's AI picture (`ai_pq`, 0.29 TOPS,
+  priority secondary), which Filmmaker mode leaves idle; usage reads 0. The
+  userspace is `libnpu` (`lgnpu_init/prepare/invoke`, offline-compiled
+  `.lgnpu` packages through `libwebos_offline_nnhal`), with TensorFlow Lite
+  and `libtflite-npu-delegate` on top. On CPU, TFLite runs LG's YOLOv3 int8
+  detector in 421 ms and its sound model in 66 ms (4 threads); the delegate,
+  loaded through `benchmark_model --external_delegate_path`, applies to none
+  of LG's shipped models, so it needs options or a resource lease first.
+  Spike: reverse the delegate's options and the inference manager's
+  resource flow, then run one LG package with `run_lgnpu` and time it against
+  the CPU. Uses for LumaShell come after that number: on-device scene
+  classification for ambient light and picture profiles, or local voice
+  commands (the microphone is Nitin's decision).
+
 ## Settings
 
 LG's Settings (`com.palm.app.settings`, an Enact web app, 25 MB on disk,
